@@ -414,6 +414,90 @@ select.form-control { cursor: pointer; }
   min-width: 200px;
 }
 
+/* ─── Crawl Results: Category → Date → Site 계층 ─── */
+.result-summary-chips {
+  display: flex; gap: 8px; align-items: center;
+}
+.result-chip {
+  font-size: 12px; color: var(--text-secondary);
+  background: var(--bg-secondary); padding: 4px 10px;
+  border-radius: 12px; white-space: nowrap;
+}
+.result-chip strong { color: var(--text); margin-left: 2px; }
+.result-chip.success strong { color: var(--success); }
+
+/* 카테고리 섹션 */
+.result-category-section {
+  margin-bottom: 24px;
+}
+.result-cat-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 16px; background: var(--primary);
+  border-radius: 8px; cursor: pointer;
+  user-select: none; margin-bottom: 2px;
+}
+.result-cat-arrow {
+  font-size: 11px; color: rgba(255,255,255,0.7); width: 16px;
+}
+.result-cat-title {
+  font-size: 15px; font-weight: 700; color: #fff; margin: 0;
+}
+.result-cat-count {
+  font-size: 12px; color: rgba(255,255,255,0.8);
+  margin-left: auto; font-weight: 500;
+}
+
+/* 날짜 섹션 */
+.result-date-section {
+  margin-left: 8px; border-left: 2px solid var(--border);
+  margin-bottom: 2px;
+}
+.result-date-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 16px; background: var(--bg-secondary);
+  cursor: pointer; user-select: none;
+  border-bottom: 1px solid var(--border);
+}
+.result-date-arrow {
+  font-size: 10px; color: var(--text-secondary); width: 14px;
+}
+.result-date-label {
+  font-size: 14px; font-weight: 600; color: var(--text);
+}
+.result-date-meta {
+  font-size: 11px; color: var(--text-secondary); margin-left: auto;
+}
+.result-date-body {
+  padding: 4px 0 4px 16px;
+}
+
+/* 사이트 그룹 */
+.result-site-group {
+  margin-bottom: 8px; border: 1px solid var(--border);
+  border-radius: 6px; overflow: hidden; background: #fff;
+}
+.result-site-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; background: #f8fafc;
+  border-bottom: 1px solid var(--border);
+}
+.result-site-name {
+  font-size: 13px; font-weight: 600; color: var(--text);
+}
+.result-site-count {
+  font-size: 11px; color: var(--text-secondary); margin-left: auto;
+}
+.result-site-table {
+  margin: 0; font-size: 13px;
+}
+.result-site-table thead th {
+  font-size: 11px; padding: 6px 10px;
+  background: #fff; border-bottom: 1px solid var(--border);
+}
+.result-site-table tbody td {
+  padding: 6px 10px;
+}
+
 /* ─── Expandable Row ─── */
 .expand-row td {
   padding: 0 !important;

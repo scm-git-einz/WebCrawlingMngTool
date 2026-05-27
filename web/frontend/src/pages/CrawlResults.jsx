@@ -11,6 +11,45 @@ const AGENT_LABELS = {
   promotion: '이벤트 수집', banner: '배너 수집', directory: '목록 수집',
 }
 
+const AGENT_BADGE_CLASS = {
+  product: 'dp', news: 'pending', cafe: 'tess',
+  promotion: 'success', banner: 'running', directory: 'failed',
+}
+
+/* ── 날짜/시간 유틸 ── */
+const toDateKey = (crawlDate) => (crawlDate || '').split(' ')[0] || '(날짜 없음)'
+const toTime = (crawlDate) => (crawlDate || '').split(' ')[1] || ''
+const DAY_NAMES = ['일', '월', '화', '수', '목', '금', '토']
+const formatDateLabel = (dateKey) => {
+  if (!dateKey || dateKey === '(날짜 없음)') return dateKey
+  const d = new Date(dateKey)
+  if (isNaN(d)) return dateKey
+  const today = new Date(); today.setHours(0,0,0,0)
+  const target = new Date(d); target.setHours(0,0,0,0)
+  const diffDays = Math.round((today - target) / 86400000)
+  const dayName = DAY_NAMES[d.getDay()]
+  if (diffDays === 0) return `오늘 (${dayName})`
+  if (diffDays === 1) return `어제 (${dayName})`
+  return `${dateKey} (${dayName})`
+}
+
+/* ── 그룹핑: 카테고리 → 날짜 → 사이트 → 결과 목록 ── */
+function groupResults(results) {
+  const tree = {}
+  results.forEach(r => {
+    const cat = r.category || '(미분류)'
+    const dateKey = toDateKey(r.crawl_date)
+    const siteKey = `${r.site_id}_${r.site_name}`
+
+    if (!tree[cat]) tree[cat] = {}
+    if (!tree[cat][dateKey]) tree[cat][dateKey] = {}
+    if (!tree[cat][dateKey][siteKey]) tree[cat][dateKey][siteKey] = { site_name: r.site_name, agent_type: r.agent_type, items: [] }
+    tree[cat][dateKey][siteKey].items.push(r)
+  })
+  return tree
+}
+
+
 export default function CrawlResults() {
   const [searchParams] = useSearchParams()
   const initialSite = Number(searchParams.get('site') || 0)
@@ -21,11 +60,12 @@ export default function CrawlResults() {
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState(null)
   const [detail, setDetail] = useState(null)
+  const [collapsedCats, setCollapsedCats] = useState({})
+  const [collapsedDates, setCollapsedDates] = useState({})
 
   useEffect(() => {
     fetch('/api/sites').then(r => r.json()).then(data => {
       setSites(data)
-      // URL에서 site 파라미터가 있으면 해당 사이트 선택
       if (initialSite) setSelectedSite(initialSite)
     }).catch(() => {})
   }, [])
@@ -44,18 +84,17 @@ export default function CrawlResults() {
   }, [selectedSite])
 
   const toggleExpand = async (id) => {
-    if (expandedId === id) {
-      setExpandedId(null)
-      setDetail(null)
-      return
-    }
+    if (expandedId === id) { setExpandedId(null); setDetail(null); return }
     setExpandedId(id)
     const res = await fetch(`/api/results/${id}`)
     const data = await res.json()
     setDetail(data)
   }
 
-  // 사이트 카테고리별 그룹
+  const toggleCat = (cat) => setCollapsedCats(prev => ({ ...prev, [cat]: !prev[cat] }))
+  const toggleDate = (key) => setCollapsedDates(prev => ({ ...prev, [key]: !prev[key] }))
+
+  // 사이트 필터용 카테고리 그룹
   const sitesByCategory = {}
   sites.forEach(s => {
     const cat = s.category || '(미분류)'
@@ -63,13 +102,22 @@ export default function CrawlResults() {
     sitesByCategory[cat].push(s)
   })
 
+  // 결과 그룹핑
+  const grouped = groupResults(results)
+  const categoryOrder = Object.keys(grouped)
+
+  // 전체 통계
+  const totalSuccess = results.filter(r => r.status === 'success').length
+  const totalProducts = results.reduce((sum, r) => sum + (r.product_count || 0), 0)
+
   return (
     <>
       <div className="page-header">
         <h1>수집 결과</h1>
-        <p>도메인별 크롤링 결과를 확인합니다</p>
+        <p>카테고리별 크롤링 결과를 날짜/사이트 단위로 확인합니다</p>
       </div>
 
+      {/* 필터 + 요약 */}
       <div className="filter-bar">
         <select
           className="form-control"
@@ -86,84 +134,121 @@ export default function CrawlResults() {
             </optgroup>
           ))}
         </select>
-        {selectedSite > 0 && (() => {
-          const site = sites.find(s => s.id === selectedSite)
-          return site ? (
-            <span style={{fontSize:12,color:'var(--text-secondary)'}}>
-              <span className={`badge ${site.agent_type === 'product' ? 'dp' : site.agent_type === 'news' ? 'pending' : 'tess'}`} style={{fontSize:11}}>
-                {AGENT_LABELS[site.agent_type] || site.agent_type}
-              </span>
-            </span>
-          ) : null
-        })()}
+        <div className="result-summary-chips">
+          <span className="result-chip">전체 <strong>{results.length}</strong>건</span>
+          <span className="result-chip success">성공 <strong>{totalSuccess}</strong></span>
+          <span className="result-chip">수집 <strong>{totalProducts.toLocaleString()}</strong>건</span>
+        </div>
       </div>
 
-      <div className="card">
-        <div className="card-header">
-          <h2>크롤링 결과 ({results.length}건)</h2>
-        </div>
-        <div className="card-body no-pad">
-          {loading ? <div className="loading">Loading...</div> : (
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>사이트</th>
-                  <th>유형</th>
-                  <th>크롤링 날짜</th>
-                  <th>상태</th>
-                  <th>수집 건수</th>
-                  <th>소요시간</th>
-                  <th>상세</th>
-                </tr>
-              </thead>
-              <tbody>
-                {results.map(r => (
-                  <ResultRow
-                    key={r.id}
-                    r={r}
-                    isExpanded={expandedId === r.id}
-                    detail={expandedId === r.id ? detail : null}
-                    onToggle={() => toggleExpand(r.id)}
-                  />
-                ))}
-                {results.length === 0 && (
-                  <tr><td colSpan={8} className="empty-state">결과가 없습니다</td></tr>
-                )}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </div>
+      {loading ? <div className="loading">Loading...</div> : (
+        categoryOrder.length === 0 ? (
+          <div className="card"><div className="card-body"><div className="empty-state">결과가 없습니다</div></div></div>
+        ) : (
+          categoryOrder.map(cat => {
+            const dates = grouped[cat]
+            const dateKeys = Object.keys(dates) // 이미 최신순 (API가 DESC)
+            const catResultCount = Object.values(dates).reduce((sum, d) =>
+              sum + Object.values(d).reduce((s2, site) => s2 + site.items.length, 0), 0)
+            const isCatCollapsed = collapsedCats[cat]
+
+            return (
+              <div key={cat} className="result-category-section">
+                {/* 카테고리 헤더 */}
+                <div className="result-cat-header" onClick={() => toggleCat(cat)}>
+                  <span className="result-cat-arrow">{isCatCollapsed ? '▶' : '▼'}</span>
+                  <h2 className="result-cat-title">{cat}</h2>
+                  <span className="result-cat-count">{catResultCount}건</span>
+                </div>
+
+                {!isCatCollapsed && dateKeys.map(dateKey => {
+                  const siteMap = dates[dateKey]
+                  const dateCollapseKey = `${cat}__${dateKey}`
+                  const isDateCollapsed = collapsedDates[dateCollapseKey]
+                  const dateResultCount = Object.values(siteMap).reduce((s, site) => s + site.items.length, 0)
+                  const dateSiteCount = Object.keys(siteMap).length
+
+                  return (
+                    <div key={dateKey} className="result-date-section">
+                      {/* 날짜 헤더 */}
+                      <div className="result-date-header" onClick={() => toggleDate(dateCollapseKey)}>
+                        <span className="result-date-arrow">{isDateCollapsed ? '▶' : '▼'}</span>
+                        <span className="result-date-label">{formatDateLabel(dateKey)}</span>
+                        <span className="result-date-meta">{dateSiteCount}개 사이트 / {dateResultCount}건</span>
+                      </div>
+
+                      {!isDateCollapsed && (
+                        <div className="result-date-body">
+                          {Object.entries(siteMap).map(([siteKey, siteData]) => (
+                            <div key={siteKey} className="result-site-group">
+                              {/* 사이트 이름 */}
+                              <div className="result-site-header">
+                                <span className={`badge ${AGENT_BADGE_CLASS[siteData.agent_type] || 'dp'}`} style={{fontSize:10}}>
+                                  {AGENT_LABELS[siteData.agent_type] || siteData.agent_type}
+                                </span>
+                                <span className="result-site-name">{siteData.site_name}</span>
+                                <span className="result-site-count">{siteData.items.length}회 수집</span>
+                              </div>
+                              {/* 결과 테이블 */}
+                              <table className="data-table result-site-table">
+                                <thead>
+                                  <tr>
+                                    <th style={{width:50}}>ID</th>
+                                    <th style={{width:80}}>시간</th>
+                                    <th style={{width:70}}>상태</th>
+                                    <th style={{width:80}}>수집 건수</th>
+                                    <th style={{width:80}}>소요시간</th>
+                                    <th style={{width:50}}>상세</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {siteData.items.map(r => (
+                                    <ResultRow
+                                      key={r.id}
+                                      r={r}
+                                      isExpanded={expandedId === r.id}
+                                      detail={expandedId === r.id ? detail : null}
+                                      onToggle={() => toggleExpand(r.id)}
+                                    />
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          })
+        )
+      )}
     </>
   )
 }
 
 
 function ResultRow({ r, isExpanded, detail, onToggle }) {
+  const time = toTime(r.crawl_date)
   return (
     <>
       <tr>
-        <td>{r.id}</td>
-        <td style={{fontWeight:600}}>{r.site_name}</td>
-        <td>
-          <span className={`badge ${r.agent_type === 'product' ? 'dp' : r.agent_type === 'news' ? 'pending' : 'tess'}`} style={{fontSize:11}}>
-            {r.agent_type}
-          </span>
-        </td>
-        <td style={{fontSize:12,whiteSpace:'nowrap'}}>{r.crawl_date}</td>
+        <td style={{color:'var(--text-secondary)',fontSize:12}}>{r.id}</td>
+        <td style={{fontSize:12,whiteSpace:'nowrap',fontWeight:500}}>{time}</td>
         <td><span className={`badge ${STATUS_CLASS[r.status] || ''}`}>{r.status}</span></td>
-        <td>{r.product_count}</td>
-        <td>{r.elapsed_sec ? `${r.elapsed_sec.toFixed(1)}s` : '-'}</td>
+        <td style={{fontWeight:600}}>{r.product_count || 0}</td>
+        <td style={{fontSize:12,color:'var(--text-secondary)'}}>{r.elapsed_sec ? `${r.elapsed_sec.toFixed(1)}s` : '-'}</td>
         <td>
-          <button className="btn btn-outline btn-sm" onClick={onToggle}>
-            {isExpanded ? '접기' : '펼치기'}
+          <button className="btn btn-outline btn-sm" onClick={onToggle} style={{fontSize:11,padding:'2px 8px'}}>
+            {isExpanded ? '접기' : '보기'}
           </button>
         </td>
       </tr>
       {isExpanded && (
         <tr className="expand-row">
-          <td colSpan={8}>
+          <td colSpan={6}>
             <ExpandedDetail detail={detail} />
           </td>
         </tr>

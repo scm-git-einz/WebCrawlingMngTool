@@ -1039,3 +1039,66 @@ ProductAgent에서 PromotionAgent를 분리해야 함.
 
 **수정된 파일**:
 - `agents/product/engine.py` (`_JS_EXTRACT_DETAIL`, `_apply_detail`, `_save_json`)
+
+---
+
+### Phase 18. 크롤링 완료 후 실행 버튼 미전환 수정 + GitHub 연동
+> 크롤링 종료 감지 정확도 개선 (Popen.poll()) + 프로젝트 GitHub 연동
+
+**사용자 요청**: 수집 대상 설정에서 수집 agent 수행 완료 후 종료 버튼(■)이 사라지지 않고 실행 버튼(▶)이 노출되지 않는 문제
+
+**원인 분석**:
+1. **Windows `os.kill(pid, 0)` 한계**: `Popen` 객체의 프로세스 핸들이 열려있으면 프로세스 종료 후에도 `os.kill(pid, 0)`이 성공 반환
+2. **Popen 객체 미보관**: `subprocess.Popen`으로 프로세스를 시작하지만 반환된 객체를 저장하지 않아 `poll()` 사용 불가
+
+**작업 내역**:
+
+1. `web/backend/routes/sites.py` — **프로세스 종료 감지 리팩토링**
+   - `_is_process_alive(pid)` 헬퍼 함수 추가: `Popen.poll()` 우선 → `os.kill` fallback
+   - `_cleanup_finished(pid)` 헬퍼 함수 추가: 로그 핸들 닫기 + `_running_processes` 제거
+   - `run_crawl()`: `_running_processes`에 `"proc"` (Popen 객체) 저장
+   - `crawl_status()`: `_is_process_alive()` + `_cleanup_finished()` 사용으로 교체
+   - `stop_crawl()`: 동일 패턴 적용
+   - `get_crawl_logs()`: 동일 패턴 적용
+   - 기존 `os.kill(pid, 0)` 직접 호출 5곳 → `_is_process_alive()` 통합
+
+2. GitHub 연동
+   - `.gitignore` 업데이트: `logs/`, `*.traineddata`, `/_*.py`, `.claude/` 추가
+   - Git 초기화 + 초기 커밋 (183파일, 43,176줄)
+   - `gh` CLI 설치 (v2.92.0)
+   - Remote: `https://github.com/scm-git-einz/WebCrawlingMngTool.git` (Private)
+
+**수정된 파일**:
+- `web/backend/routes/sites.py` (`_is_process_alive`, `_cleanup_finished`, `run_crawl`, `crawl_status`, `stop_crawl`, `get_crawl_logs`)
+- `.gitignore`
+
+---
+
+### Phase 18-1. 수집 결과 페이지 — 카테고리/날짜/사이트 계층 뷰
+> 수집 결과를 카테고리별 → 날짜별 → 사이트별 계층 구조로 재구성
+
+**사용자 요청**: 크롤링 결과를 카테고리별-날짜별-사이트별로 보여주세요. 날짜는 일자별로 보여주고 상세 시간을 표시.
+
+**작업 내역**:
+
+1. `web/frontend/src/pages/CrawlResults.jsx` — **메인 레이아웃 전면 재구성**
+   - 기존: 플랫 테이블 (ID/사이트/유형/날짜/상태/건수/소요시간/상세)
+   - 변경: **카테고리 → 날짜 → 사이트** 3단계 아코디언 구조
+   - `groupResults()`: API 결과를 `{ category → dateKey → siteKey → items[] }` 트리로 변환
+   - 카테고리 헤더: 컬러 배경 + 접기/펼치기 + 결과 건수
+   - 날짜 헤더: 일자별 그룹 + "오늘/어제/요일" 표시 + 사이트 수/건수 요약
+   - 사이트 그룹: 에이전트 유형 뱃지 + 사이트명 + 수집 횟수
+   - 결과 테이블: 시간(HH:MM:SS) + 상태 + 수집 건수 + 소요시간 + 상세 보기
+   - 상단 요약 칩: 전체 N건 / 성공 N / 수집 N건
+
+2. `web/frontend/src/App.css` — **계층 뷰 스타일 추가**
+   - `.result-category-section`: 카테고리 블록
+   - `.result-cat-header`: primary 색상 배경 아코디언 헤더
+   - `.result-date-section` / `.result-date-header`: 날짜 그룹 (왼쪽 보더 라인)
+   - `.result-site-group` / `.result-site-header`: 사이트 카드
+   - `.result-site-table`: 컴팩트 결과 테이블
+   - `.result-summary-chips`: 상단 요약 칩
+
+**수정된 파일**:
+- `web/frontend/src/pages/CrawlResults.jsx` (메인 레이아웃 + ResultRow 컴포넌트)
+- `web/frontend/src/App.css` (계층 뷰 스타일)

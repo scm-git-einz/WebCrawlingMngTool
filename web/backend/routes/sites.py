@@ -274,8 +274,36 @@ def update_schedule(site_id: int, body: ScheduleBody):
 
 # ─── 수집 실행 ──────────────────────────────────────────────
 
-# 실행 중인 프로세스 추적 (PID → site_id)
+# 실행 중인 프로세스 추적 (PID → info dict)
+# info에 "proc" (Popen 객체) 포함 → poll()로 정확한 종료 감지
 _running_processes: dict[int, dict] = {}
+
+
+def _is_process_alive(pid: int) -> bool:
+    """프로세스가 실행 중인지 확인. Popen.poll() 우선, fallback으로 os.kill."""
+    info = _running_processes.get(pid)
+    if not info:
+        return False
+    proc = info.get("proc")
+    if proc is not None:
+        return proc.poll() is None  # None이면 아직 실행 중
+    # Popen 객체 없으면 기존 방식 fallback
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _cleanup_finished(pid: int):
+    """종료된 프로세스의 로그 핸들을 닫고 _running_processes에서 제거."""
+    info = _running_processes.get(pid)
+    if not info:
+        return
+    handle = info.get("log_handle")
+    if handle and not handle.closed:
+        handle.close()
+    del _running_processes[pid]
 
 
 @router.post("/crawl/run")
@@ -301,11 +329,10 @@ def run_crawl(body: dict):
             already = False
             for pid, info in list(_running_processes.items()):
                 if info["site_id"] == sid:
-                    try:
-                        os.kill(pid, 0)  # 프로세스 존재 확인
+                    if _is_process_alive(pid):
                         already = True
-                    except OSError:
-                        del _running_processes[pid]  # 종료됨
+                    else:
+                        _cleanup_finished(pid)
 
             if already:
                 results.append({"site_id": sid, "status": "already_running", "message": f"{site['site_name']} 이미 실행 중"})
@@ -331,6 +358,7 @@ def run_crawl(body: dict):
                     "site_id": sid,
                     "site_name": site["site_name"],
                     "pid": proc.pid,
+                    "proc": proc,  # Popen 객체 → poll()로 정확한 종료 감지
                     "log_file": log_filename,
                     "log_path": log_path,
                     "log_handle": log_file,
@@ -356,16 +384,11 @@ def crawl_status():
     """실행 중인 크롤링 프로세스 목록"""
     alive = []
     for pid, info in list(_running_processes.items()):
-        try:
-            os.kill(pid, 0)
-            safe = {k: v for k, v in info.items() if k not in ("log_handle",)}
+        if _is_process_alive(pid):
+            safe = {k: v for k, v in info.items() if k not in ("log_handle", "proc")}
             alive.append(safe)
-        except OSError:
-            # 프로세스 종료 → 로그 핸들 닫기
-            handle = info.get("log_handle")
-            if handle and not handle.closed:
-                handle.close()
-            del _running_processes[pid]
+        else:
+            _cleanup_finished(pid)
     return alive
 
 
@@ -385,14 +408,9 @@ def stop_crawl(body: dict):
         for pid, info in list(_running_processes.items()):
             if info["site_id"] == sid:
                 found = True
-                try:
-                    os.kill(pid, 0)  # 프로세스 존재 확인
-                except OSError:
+                if not _is_process_alive(pid):
                     # 이미 종료됨
-                    handle = info.get("log_handle")
-                    if handle and not handle.closed:
-                        handle.close()
-                    del _running_processes[pid]
+                    _cleanup_finished(pid)
                     results.append({
                         "site_id": sid,
                         "status": "already_stopped",
@@ -410,17 +428,15 @@ def stop_crawl(body: dict):
                     else:
                         os.kill(pid, signal.SIGTERM)
 
-                    # 로그 핸들 닫기
+                    # 로그 핸들에 종료 메시지 기록
                     handle = info.get("log_handle")
                     if handle and not handle.closed:
-                        # 종료 메시지 기록
                         try:
                             handle.write(f"\n[시스템] 사용자에 의해 크롤링이 중지되었습니다.\n")
                             handle.flush()
                         except Exception:
                             pass
-                        handle.close()
-                    del _running_processes[pid]
+                    _cleanup_finished(pid)
                     results.append({
                         "site_id": sid,
                         "status": "stopped",
@@ -457,16 +473,12 @@ def get_crawl_logs(site_id: int, tail: int = 200):
     is_running = False
     for pid, info in list(_running_processes.items()):
         if info["site_id"] == site_id:
-            try:
-                os.kill(pid, 0)
+            if _is_process_alive(pid):
                 log_path = info.get("log_path")
                 is_running = True
-            except OSError:
+            else:
                 log_path = info.get("log_path")
-                handle = info.get("log_handle")
-                if handle and not handle.closed:
-                    handle.close()
-                del _running_processes[pid]
+                _cleanup_finished(pid)
             break
 
     # 2) 실행 중인 게 없으면 가장 최근 로그 파일 찾기

@@ -375,8 +375,8 @@ export default function SiteSettings() {
                     <th style={{width:80}}>에이전트</th>
                     <th style={{width:100}}>수집 주기</th>
                     <th style={{width:60}}>상태</th>
-                    <th style={{width:60}}>설정</th>
-                    <th style={{width:60}}>실행</th>
+                    <th style={{width:50}}>설정</th>
+                    <th style={{width:80}}>실행</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -422,7 +422,7 @@ export default function SiteSettings() {
                             설정
                           </button>
                         </td>
-                        <td style={{display:'flex',gap:4}}>
+                        <td style={{whiteSpace:'nowrap'}}>
                           {running ? (
                             <button
                               className="btn btn-sm btn-stop"
@@ -441,6 +441,7 @@ export default function SiteSettings() {
                               ▶
                             </button>
                           )}
+                          {' '}
                           <button
                             className="btn btn-outline btn-sm"
                             onClick={() => setLogView({ siteId: s.id, siteName: s.site_name })}
