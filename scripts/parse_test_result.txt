@@ -1,0 +1,171 @@
+﻿이미지: scripts/test_images/post_885130_img1.png (822,240 bytes)
+
+Document Parse API 호출 중...
+응답 코드: 200
+응답 키: ['api', 'content', 'elements', 'model', 'ocr', 'usage']
+
+content 키: ['html', 'markdown', 'text']
+
+=== HTML (2569자) ===
+<header id='0' style='font-size:20px'>11:41</header>
+<p id='1' data-category='paragraph' style='font-size:22px'>←</p>
+<br><h1 id='2' style='font-size:22px'>위스키</h1>
+<p id='3' data-category='paragraph' style='font-size:22px'>전체 몰트 버번 그레인 블렌디 V</p>
+<p id='4' data-category='paragraph' style='font-size:16px'>필터 1</p>
+<br><p id='5' data-category='paragraph' style='font-size:18px'>클리어런스</p>
+<h1 id='6' style='font-size:18px'>세일</h1>
+<br><figure id='7'><img style='font-size:16px' alt="allantine's.
+Clays
+30
+Willaly
+Ballantines
+30
+GooBallantime" data-coord="top-left:(157,697); bottom-right:(418,1079)" /></figure>
+<br><p id='8' data-category='paragraph' style='font-size:18px'>품절제외</p>
+<h1 id='9' style='font-size:18px'>세일</h1>
+<br><figure id='10'><img style='font-size:14px' alt="BlueLabel WALKER
+JOHNNIE
+JOHNNIE
+Blue Label
+000
+BaokkBakBa" data-coord="top-left:(685,645); bottom-right:(1073,1125)" /></figure>
+<p id='11' data-category='paragraph' style='font-size:18px'>발렌타인<br>발렌타인 30년 700ml</p>
+<br><p id='12' data-category='paragraph' style='font-size:18px'>조니워커</p>
+<br><p id='13' data-category='paragraph' style='font-size:18px'>조니워커 블루라벨 750ml</p>
+<h1 id='14' style='font-size:18px'>30% $447</h1>
+<br><p id='15' data-category='paragraph' style='font-size:18px'>$312.9 470,445원</p>
+<h1 id='16' style='font-size:18px'>세일</h1>
+<figure id='17'><img style='font-size:14px' alt="ESTY 1892
+SINGLE MALT SCOTCH WHISKY
+istilledat
+THE BALVENIE
+DistilliryBauffier
+SCOTLAND
+GOLDEN CASK
+ENISHED 즈 RUM SEASONED CASES
+AGED 12 YEARS
+SINGLE MALT SCOTCH WHISKY
+THE BALVENIE
+FRITCHIP GOLDEN CASH
+2
+Hiflechn
+The
+wets" data-coord="top-left:(185,1727); bottom-right:(424,2091)" /></figure>
+<br><p id='18' data-category='paragraph' style='font-size:18px'>35% $227</p>
+<br><p id='19' data-category='paragraph' style='font-size:20px'>$147.55 221,841원</p>
+<figure id='20'><img style='font-size:14px' alt="세일
+Glenfiddich.
+GRAN CORTES
+XXII
+Glenfiddich.
+GRAN CORTES
+XXII ADED 22
+ONGLE MALT SCOTCH WHISKY SINGLE MALT SCOTCH WHI
+
+=== Content Text (974자) ===
+11:41
+←
+위스키
+전체 몰트 버번 그레인 블렌디 V
+필터 1
+클리어런스
+세일
+![image](/image/placeholder)
+allantine's.
+Clays
+30
+Willaly
+Ballantines
+30
+GooBallantime
+품절제외
+세일
+![image](/image/placeholder)
+BlueLabel WALKER
+JOHNNIE
+JOHNNIE
+Blue Label
+000
+BaokkBakBa
+발렌타인
+발렌타인 30년 700ml
+조니워커
+조니워커 블루라벨 750ml
+30% $447
+$312.9 470,445원
+세일
+![image](/image/placeholder)
+ESTY 1892
+SINGLE MALT SCOTCH WHISKY
+istilledat
+THE BALVENIE
+DistilliryBauffier
+SCOTLAND
+GOLDEN CASK
+ENISHED 즈 RUM SEASONED CASES
+AGED 12 YEARS
+SINGLE MALT SCOTCH WHISKY
+THE BALVENIE
+FRITCHIP GOLDEN CASH
+2
+Hiflechn
+The
+wets
+35% $227
+$147.55 221,841원
+![image](/image/placeholder)
+세일
+Glenfiddich.
+GRAN CORTES
+XXII
+Glenfiddich.
+GRAN CORTES
+XXII ADED 22
+ONGLE MALT SCOTCH WHISKY SINGLE MALT SCOTCH WHISKY ↑
+new SHERRY CASK FINISM RARE SHERRY CASK FINISH
+22
+SCOTLAND
+the PRICESSIONS Geller
+70d Mole4.2Kat 44.7%alc/vol.
+![image](/image/placeholder)
+
+![image](/image/placeholder)
+
+| 발베니 | 글렌피딕 |
+| --- | --- |
+| 발베니 12 골든럼 캐스크 700ml | 글렌피딕 22년 그랑 코르테즈 7 |
+
+요소 수: 24
+  [1] type=header | 11:41
+  [2] type=paragraph | ←
+  [3] type=heading1 | 위스키
+  [4] type=paragraph | 전체 몰트 버번 그레인 블렌디 V
+  [5] type=paragraph | 필터 1
+  [6] type=paragraph | 클리어런스
+  [7] type=heading1 | 세일
+  [8] type=figure | ![image](/image/placeholder)
+allantine's.
+Clays
+30
+Willaly
+Ballantines
+30
+GooBallantime
+  [9] type=paragraph | 품절제외
+  [10] type=heading1 | 세일
+  [11] type=figure | ![image](/image/placeholder)
+BlueLabel WALKER
+JOHNNIE
+JOHNNIE
+Blue Label
+000
+BaokkBakBa
+  [12] type=paragraph | 발렌타인
+발렌타인 30년 700ml
+  [13] type=paragraph | 조니워커
+  [14] type=paragraph | 조니워커 블루라벨 750ml
+  [15] type=heading1 | 30% $447
+
+결과 저장: scripts/test_images/parse_result.json
+
+Done!

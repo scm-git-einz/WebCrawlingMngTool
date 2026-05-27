@@ -1,0 +1,690 @@
+{
+  "api": "2.0",
+  "content": {
+    "html": "<header id='0' style='font-size:20px'>11:41</header>\n<p id='1' data-category='paragraph' style='font-size:22px'>←</p>\n<br><h1 id='2' style='font-size:22px'>위스키</h1>\n<p id='3' data-category='paragraph' style='font-size:22px'>전체 몰트 버번 그레인 블렌디 V</p>\n<p id='4' data-category='paragraph' style='font-size:16px'>필터 1</p>\n<br><p id='5' data-category='paragraph' style='font-size:18px'>클리어런스</p>\n<h1 id='6' style='font-size:18px'>세일</h1>\n<br><figure id='7'><img style='font-size:16px' alt=\"allantine's.\nClays\n30\nWillaly\nBallantines\n30\nGooBallantime\" data-coord=\"top-left:(157,697); bottom-right:(418,1079)\" /></figure>\n<br><p id='8' data-category='paragraph' style='font-size:18px'>품절제외</p>\n<h1 id='9' style='font-size:18px'>세일</h1>\n<br><figure id='10'><img style='font-size:14px' alt=\"BlueLabel WALKER\nJOHNNIE\nJOHNNIE\nBlue Label\n000\nBaokkBakBa\" data-coord=\"top-left:(685,645); bottom-right:(1073,1125)\" /></figure>\n<p id='11' data-category='paragraph' style='font-size:18px'>발렌타인<br>발렌타인 30년 700ml</p>\n<br><p id='12' data-category='paragraph' style='font-size:18px'>조니워커</p>\n<br><p id='13' data-category='paragraph' style='font-size:18px'>조니워커 블루라벨 750ml</p>\n<h1 id='14' style='font-size:18px'>30% $447</h1>\n<br><p id='15' data-category='paragraph' style='font-size:18px'>$312.9 470,445원</p>\n<h1 id='16' style='font-size:18px'>세일</h1>\n<figure id='17'><img style='font-size:14px' alt=\"ESTY 1892\nSINGLE MALT SCOTCH WHISKY\nistilledat\nTHE BALVENIE\nDistilliryBauffier\nSCOTLAND\nGOLDEN CASK\nENISHED 즈 RUM SEASONED CASES\nAGED 12 YEARS\nSINGLE MALT SCOTCH WHISKY\nTHE BALVENIE\nFRITCHIP GOLDEN CASH\n2\nHiflechn\nThe\nwets\" data-coord=\"top-left:(185,1727); bottom-right:(424,2091)\" /></figure>\n<br><p id='18' data-category='paragraph' style='font-size:18px'>35% $227</p>\n<br><p id='19' data-category='paragraph' style='font-size:20px'>$147.55 221,841원</p>\n<figure id='20'><img style='font-size:14px' alt=\"세일\nGlenfiddich.\nGRAN CORTES\nXXII\nGlenfiddich.\nGRAN CORTES\nXXII ADED 22\nONGLE MALT SCOTCH WHISKY SINGLE MALT SCOTCH WHISKY ↑\nnew SHERRY CASK FINISM RARE SHERRY CASK FINISH\n22\nSCOTLAND\nthe PRICESSIONS Geller\n70d Mole4.2Kat 44.7%alc/vol.\" data-coord=\"top-left:(581,1665); bottom-right:(1074,2163)\" /></figure>\n<figure id='21'><img alt=\"\" data-coord=\"top-left:(890,2205); bottom-right:(940,2260)\" /></figure>\n<br><figure id='22'><img alt=\"\" data-coord=\"top-left:(994,2206); bottom-right:(1063,2272)\" /></figure>\n<br><table id='23' style='font-size:18px'><thead><tr><td>발베니</td><td>글렌피딕</td></tr></thead><tbody><tr><td>발베니 12 골든럼 캐스크 700ml</td><td>글렌피딕 22년 그랑 코르테즈 7</td></tr></tbody></table>",
+    "markdown": "",
+    "text": "11:41\n←\n위스키\n전체 몰트 버번 그레인 블렌디 V\n필터 1\n클리어런스\n세일\n![image](/image/placeholder)\nallantine's.\nClays\n30\nWillaly\nBallantines\n30\nGooBallantime\n품절제외\n세일\n![image](/image/placeholder)\nBlueLabel WALKER\nJOHNNIE\nJOHNNIE\nBlue Label\n000\nBaokkBakBa\n발렌타인\n발렌타인 30년 700ml\n조니워커\n조니워커 블루라벨 750ml\n30% $447\n$312.9 470,445원\n세일\n![image](/image/placeholder)\nESTY 1892\nSINGLE MALT SCOTCH WHISKY\nistilledat\nTHE BALVENIE\nDistilliryBauffier\nSCOTLAND\nGOLDEN CASK\nENISHED 즈 RUM SEASONED CASES\nAGED 12 YEARS\nSINGLE MALT SCOTCH WHISKY\nTHE BALVENIE\nFRITCHIP GOLDEN CASH\n2\nHiflechn\nThe\nwets\n35% $227\n$147.55 221,841원\n![image](/image/placeholder)\n세일\nGlenfiddich.\nGRAN CORTES\nXXII\nGlenfiddich.\nGRAN CORTES\nXXII ADED 22\nONGLE MALT SCOTCH WHISKY SINGLE MALT SCOTCH WHISKY ↑\nnew SHERRY CASK FINISM RARE SHERRY CASK FINISH\n22\nSCOTLAND\nthe PRICESSIONS Geller\n70d Mole4.2Kat 44.7%alc/vol.\n![image](/image/placeholder)\n\n![image](/image/placeholder)\n\n| 발베니 | 글렌피딕 |\n| --- | --- |\n| 발베니 12 골든럼 캐스크 700ml | 글렌피딕 22년 그랑 코르테즈 7 |"
+  },
+  "elements": [
+    {
+      "category": "header",
+      "content": {
+        "html": "<header id='0' style='font-size:20px'>11:41</header>",
+        "markdown": "",
+        "text": "11:41"
+      },
+      "coordinates": [
+        {
+          "x": 0.0901,
+          "y": 0.0252
+        },
+        {
+          "x": 0.208,
+          "y": 0.0252
+        },
+        {
+          "x": 0.208,
+          "y": 0.0485
+        },
+        {
+          "x": 0.0901,
+          "y": 0.0485
+        }
+      ],
+      "id": 0,
+      "page": 1
+    },
+    {
+      "category": "paragraph",
+      "content": {
+        "html": "<p id='1' data-category='paragraph' style='font-size:22px'>←</p>",
+        "markdown": "",
+        "text": "←"
+      },
+      "coordinates": [
+        {
+          "x": 0.0612,
+          "y": 0.0786
+        },
+        {
+          "x": 0.1304,
+          "y": 0.0786
+        },
+        {
+          "x": 0.1304,
+          "y": 0.1048
+        },
+        {
+          "x": 0.0612,
+          "y": 0.1048
+        }
+      ],
+      "id": 1,
+      "page": 1
+    },
+    {
+      "category": "heading1",
+      "content": {
+        "html": "<br><h1 id='2' style='font-size:22px'>위스키</h1>",
+        "markdown": "",
+        "text": "위스키"
+      },
+      "coordinates": [
+        {
+          "x": 0.4224,
+          "y": 0.0778
+        },
+        {
+          "x": 0.5957,
+          "y": 0.0778
+        },
+        {
+          "x": 0.5957,
+          "y": 0.1059
+        },
+        {
+          "x": 0.4224,
+          "y": 0.1059
+        }
+      ],
+      "id": 2,
+      "page": 1
+    },
+    {
+      "category": "paragraph",
+      "content": {
+        "html": "<p id='3' data-category='paragraph' style='font-size:22px'>전체 몰트 버번 그레인 블렌디 V</p>",
+        "markdown": "",
+        "text": "전체 몰트 버번 그레인 블렌디 V"
+      },
+      "coordinates": [
+        {
+          "x": 0.032,
+          "y": 0.1396
+        },
+        {
+          "x": 0.9588,
+          "y": 0.1396
+        },
+        {
+          "x": 0.9588,
+          "y": 0.1667
+        },
+        {
+          "x": 0.032,
+          "y": 0.1667
+        }
+      ],
+      "id": 3,
+      "page": 1
+    },
+    {
+      "category": "paragraph",
+      "content": {
+        "html": "<p id='4' data-category='paragraph' style='font-size:16px'>필터 1</p>",
+        "markdown": "",
+        "text": "필터 1"
+      },
+      "coordinates": [
+        {
+          "x": 0.2189,
+          "y": 0.2083
+        },
+        {
+          "x": 0.3073,
+          "y": 0.2083
+        },
+        {
+          "x": 0.3073,
+          "y": 0.2265
+        },
+        {
+          "x": 0.2189,
+          "y": 0.2265
+        }
+      ],
+      "id": 4,
+      "page": 1
+    },
+    {
+      "category": "paragraph",
+      "content": {
+        "html": "<br><p id='5' data-category='paragraph' style='font-size:18px'>클리어런스</p>",
+        "markdown": "",
+        "text": "클리어런스"
+      },
+      "coordinates": [
+        {
+          "x": 0.6462,
+          "y": 0.2082
+        },
+        {
+          "x": 0.8027,
+          "y": 0.2082
+        },
+        {
+          "x": 0.8027,
+          "y": 0.227
+        },
+        {
+          "x": 0.6462,
+          "y": 0.227
+        }
+      ],
+      "id": 5,
+      "page": 1
+    },
+    {
+      "category": "heading1",
+      "content": {
+        "html": "<h1 id='6' style='font-size:18px'>세일</h1>",
+        "markdown": "",
+        "text": "세일"
+      },
+      "coordinates": [
+        {
+          "x": 0.0585,
+          "y": 0.2665
+        },
+        {
+          "x": 0.1236,
+          "y": 0.2665
+        },
+        {
+          "x": 0.1236,
+          "y": 0.2849
+        },
+        {
+          "x": 0.0585,
+          "y": 0.2849
+        }
+      ],
+      "id": 6,
+      "page": 1
+    },
+    {
+      "category": "figure",
+      "content": {
+        "html": "<br><figure id='7'><img style='font-size:16px' alt=\"allantine's.\nClays\n30\nWillaly\nBallantines\n30\nGooBallantime\" data-coord=\"top-left:(157,697); bottom-right:(418,1079)\" /></figure>",
+        "markdown": "",
+        "text": "![image](/image/placeholder)\nallantine's.\nClays\n30\nWillaly\nBallantines\n30\nGooBallantime"
+      },
+      "coordinates": [
+        {
+          "x": 0.1404,
+          "y": 0.2864
+        },
+        {
+          "x": 0.3717,
+          "y": 0.2864
+        },
+        {
+          "x": 0.3717,
+          "y": 0.4433
+        },
+        {
+          "x": 0.1404,
+          "y": 0.4433
+        }
+      ],
+      "id": 7,
+      "page": 1
+    },
+    {
+      "category": "paragraph",
+      "content": {
+        "html": "<br><p id='8' data-category='paragraph' style='font-size:18px'>품절제외</p>",
+        "markdown": "",
+        "text": "품절제외"
+      },
+      "coordinates": [
+        {
+          "x": 0.4144,
+          "y": 0.2082
+        },
+        {
+          "x": 0.5394,
+          "y": 0.2082
+        },
+        {
+          "x": 0.5394,
+          "y": 0.2269
+        },
+        {
+          "x": 0.4144,
+          "y": 0.2269
+        }
+      ],
+      "id": 8,
+      "page": 1
+    },
+    {
+      "category": "heading1",
+      "content": {
+        "html": "<h1 id='9' style='font-size:18px'>세일</h1>",
+        "markdown": "",
+        "text": "세일"
+      },
+      "coordinates": [
+        {
+          "x": 0.533,
+          "y": 0.2657
+        },
+        {
+          "x": 0.6008,
+          "y": 0.2657
+        },
+        {
+          "x": 0.6008,
+          "y": 0.2855
+        },
+        {
+          "x": 0.533,
+          "y": 0.2855
+        }
+      ],
+      "id": 9,
+      "page": 1
+    },
+    {
+      "category": "figure",
+      "content": {
+        "html": "<br><figure id='10'><img style='font-size:14px' alt=\"BlueLabel WALKER\nJOHNNIE\nJOHNNIE\nBlue Label\n000\nBaokkBakBa\" data-coord=\"top-left:(685,645); bottom-right:(1073,1125)\" /></figure>",
+        "markdown": "",
+        "text": "![image](/image/placeholder)\nBlueLabel WALKER\nJOHNNIE\nJOHNNIE\nBlue Label\n000\nBaokkBakBa"
+      },
+      "coordinates": [
+        {
+          "x": 0.6096,
+          "y": 0.2651
+        },
+        {
+          "x": 0.9538,
+          "y": 0.2651
+        },
+        {
+          "x": 0.9538,
+          "y": 0.4619
+        },
+        {
+          "x": 0.6096,
+          "y": 0.4619
+        }
+      ],
+      "id": 10,
+      "page": 1
+    },
+    {
+      "category": "paragraph",
+      "content": {
+        "html": "<p id='11' data-category='paragraph' style='font-size:18px'>발렌타인<br>발렌타인 30년 700ml</p>",
+        "markdown": "",
+        "text": "발렌타인\n발렌타인 30년 700ml"
+      },
+      "coordinates": [
+        {
+          "x": 0.0369,
+          "y": 0.5299
+        },
+        {
+          "x": 0.3555,
+          "y": 0.5299
+        },
+        {
+          "x": 0.3555,
+          "y": 0.5786
+        },
+        {
+          "x": 0.0369,
+          "y": 0.5786
+        }
+      ],
+      "id": 11,
+      "page": 1
+    },
+    {
+      "category": "paragraph",
+      "content": {
+        "html": "<br><p id='12' data-category='paragraph' style='font-size:18px'>조니워커</p>",
+        "markdown": "",
+        "text": "조니워커"
+      },
+      "coordinates": [
+        {
+          "x": 0.5134,
+          "y": 0.5307
+        },
+        {
+          "x": 0.6421,
+          "y": 0.5307
+        },
+        {
+          "x": 0.6421,
+          "y": 0.5494
+        },
+        {
+          "x": 0.5134,
+          "y": 0.5494
+        }
+      ],
+      "id": 12,
+      "page": 1
+    },
+    {
+      "category": "paragraph",
+      "content": {
+        "html": "<br><p id='13' data-category='paragraph' style='font-size:18px'>조니워커 블루라벨 750ml</p>",
+        "markdown": "",
+        "text": "조니워커 블루라벨 750ml"
+      },
+      "coordinates": [
+        {
+          "x": 0.5143,
+          "y": 0.5578
+        },
+        {
+          "x": 0.8754,
+          "y": 0.5578
+        },
+        {
+          "x": 0.8754,
+          "y": 0.5773
+        },
+        {
+          "x": 0.5143,
+          "y": 0.5773
+        }
+      ],
+      "id": 13,
+      "page": 1
+    },
+    {
+      "category": "heading1",
+      "content": {
+        "html": "<h1 id='14' style='font-size:18px'>30% $447</h1>",
+        "markdown": "",
+        "text": "30% $447"
+      },
+      "coordinates": [
+        {
+          "x": 0.0396,
+          "y": 0.6134
+        },
+        {
+          "x": 0.2412,
+          "y": 0.6134
+        },
+        {
+          "x": 0.2412,
+          "y": 0.6327
+        },
+        {
+          "x": 0.0396,
+          "y": 0.6327
+        }
+      ],
+      "id": 14,
+      "page": 1
+    },
+    {
+      "category": "paragraph",
+      "content": {
+        "html": "<br><p id='15' data-category='paragraph' style='font-size:18px'>$312.9 470,445원</p>",
+        "markdown": "",
+        "text": "$312.9 470,445원"
+      },
+      "coordinates": [
+        {
+          "x": 0.039,
+          "y": 0.6385
+        },
+        {
+          "x": 0.3493,
+          "y": 0.6385
+        },
+        {
+          "x": 0.3493,
+          "y": 0.6587
+        },
+        {
+          "x": 0.039,
+          "y": 0.6587
+        }
+      ],
+      "id": 15,
+      "page": 1
+    },
+    {
+      "category": "heading1",
+      "content": {
+        "html": "<h1 id='16' style='font-size:18px'>세일</h1>",
+        "markdown": "",
+        "text": "세일"
+      },
+      "coordinates": [
+        {
+          "x": 0.0589,
+          "y": 0.6892
+        },
+        {
+          "x": 0.1233,
+          "y": 0.6892
+        },
+        {
+          "x": 0.1233,
+          "y": 0.707
+        },
+        {
+          "x": 0.0589,
+          "y": 0.707
+        }
+      ],
+      "id": 16,
+      "page": 1
+    },
+    {
+      "category": "figure",
+      "content": {
+        "html": "<figure id='17'><img style='font-size:14px' alt=\"ESTY 1892\nSINGLE MALT SCOTCH WHISKY\nistilledat\nTHE BALVENIE\nDistilliryBauffier\nSCOTLAND\nGOLDEN CASK\nENISHED 즈 RUM SEASONED CASES\nAGED 12 YEARS\nSINGLE MALT SCOTCH WHISKY\nTHE BALVENIE\nFRITCHIP GOLDEN CASH\n2\nHiflechn\nThe\nwets\" data-coord=\"top-left:(185,1727); bottom-right:(424,2091)\" /></figure>",
+        "markdown": "",
+        "text": "![image](/image/placeholder)\nESTY 1892\nSINGLE MALT SCOTCH WHISKY\nistilledat\nTHE BALVENIE\nDistilliryBauffier\nSCOTLAND\nGOLDEN CASK\nENISHED 즈 RUM SEASONED CASES\nAGED 12 YEARS\nSINGLE MALT SCOTCH WHISKY\nTHE BALVENIE\nFRITCHIP GOLDEN CASH\n2\nHiflechn\nThe\nwets"
+      },
+      "coordinates": [
+        {
+          "x": 0.1652,
+          "y": 0.709
+        },
+        {
+          "x": 0.3775,
+          "y": 0.709
+        },
+        {
+          "x": 0.3775,
+          "y": 0.8584
+        },
+        {
+          "x": 0.1652,
+          "y": 0.8584
+        }
+      ],
+      "id": 17,
+      "page": 1
+    },
+    {
+      "category": "paragraph",
+      "content": {
+        "html": "<br><p id='18' data-category='paragraph' style='font-size:18px'>35% $227</p>",
+        "markdown": "",
+        "text": "35% $227"
+      },
+      "coordinates": [
+        {
+          "x": 0.5146,
+          "y": 0.6136
+        },
+        {
+          "x": 0.7121,
+          "y": 0.6136
+        },
+        {
+          "x": 0.7121,
+          "y": 0.6326
+        },
+        {
+          "x": 0.5146,
+          "y": 0.6326
+        }
+      ],
+      "id": 18,
+      "page": 1
+    },
+    {
+      "category": "paragraph",
+      "content": {
+        "html": "<br><p id='19' data-category='paragraph' style='font-size:20px'>$147.55 221,841원</p>",
+        "markdown": "",
+        "text": "$147.55 221,841원"
+      },
+      "coordinates": [
+        {
+          "x": 0.5444,
+          "y": 0.6387
+        },
+        {
+          "x": 0.8309,
+          "y": 0.6387
+        },
+        {
+          "x": 0.8309,
+          "y": 0.6582
+        },
+        {
+          "x": 0.5444,
+          "y": 0.6582
+        }
+      ],
+      "id": 19,
+      "page": 1
+    },
+    {
+      "category": "figure",
+      "content": {
+        "html": "<figure id='20'><img style='font-size:14px' alt=\"세일\nGlenfiddich.\nGRAN CORTES\nXXII\nGlenfiddich.\nGRAN CORTES\nXXII ADED 22\nONGLE MALT SCOTCH WHISKY SINGLE MALT SCOTCH WHISKY ↑\nnew SHERRY CASK FINISM RARE SHERRY CASK FINISH\n22\nSCOTLAND\nthe PRICESSIONS Geller\n70d Mole4.2Kat 44.7%alc/vol.\" data-coord=\"top-left:(581,1665); bottom-right:(1074,2163)\" /></figure>",
+        "markdown": "",
+        "text": "![image](/image/placeholder)\n세일\nGlenfiddich.\nGRAN CORTES\nXXII\nGlenfiddich.\nGRAN CORTES\nXXII ADED 22\nONGLE MALT SCOTCH WHISKY SINGLE MALT SCOTCH WHISKY ↑\nnew SHERRY CASK FINISM RARE SHERRY CASK FINISH\n22\nSCOTLAND\nthe PRICESSIONS Geller\n70d Mole4.2Kat 44.7%alc/vol."
+      },
+      "coordinates": [
+        {
+          "x": 0.5166,
+          "y": 0.6839
+        },
+        {
+          "x": 0.9549,
+          "y": 0.6839
+        },
+        {
+          "x": 0.9549,
+          "y": 0.8879
+        },
+        {
+          "x": 0.5166,
+          "y": 0.8879
+        }
+      ],
+      "id": 20,
+      "page": 1
+    },
+    {
+      "category": "figure",
+      "content": {
+        "html": "<figure id='21'><img alt=\"\" data-coord=\"top-left:(890,2205); bottom-right:(940,2260)\" /></figure>",
+        "markdown": "",
+        "text": "![image](/image/placeholder)\n"
+      },
+      "coordinates": [
+        {
+          "x": 0.7919,
+          "y": 0.9055
+        },
+        {
+          "x": 0.8362,
+          "y": 0.9055
+        },
+        {
+          "x": 0.8362,
+          "y": 0.9281
+        },
+        {
+          "x": 0.7919,
+          "y": 0.9281
+        }
+      ],
+      "id": 21,
+      "page": 1
+    },
+    {
+      "category": "figure",
+      "content": {
+        "html": "<br><figure id='22'><img alt=\"\" data-coord=\"top-left:(994,2206); bottom-right:(1063,2272)\" /></figure>",
+        "markdown": "",
+        "text": "![image](/image/placeholder)\n"
+      },
+      "coordinates": [
+        {
+          "x": 0.8836,
+          "y": 0.9057
+        },
+        {
+          "x": 0.9453,
+          "y": 0.9057
+        },
+        {
+          "x": 0.9453,
+          "y": 0.933
+        },
+        {
+          "x": 0.8836,
+          "y": 0.933
+        }
+      ],
+      "id": 22,
+      "page": 1
+    },
+    {
+      "category": "table",
+      "content": {
+        "html": "<br><table id='23' style='font-size:18px'><thead><tr><td>발베니</td><td>글렌피딕</td></tr></thead><tbody><tr><td>발베니 12 골든럼 캐스크 700ml</td><td>글렌피딕 22년 그랑 코르테즈 7</td></tr></tbody></table>",
+        "markdown": "",
+        "text": "| 발베니 | 글렌피딕 |\n| --- | --- |\n| 발베니 12 골든럼 캐스크 700ml | 글렌피딕 22년 그랑 코르테즈 7 |\n"
+      },
+      "coordinates": [
+        {
+          "x": 0.0351,
+          "y": 0.9444
+        },
+        {
+          "x": 0.9509,
+          "y": 0.9444
+        },
+        {
+          "x": 0.9509,
+          "y": 0.9991
+        },
+        {
+          "x": 0.0351,
+          "y": 0.9991
+        }
+      ],
+      "id": 23,
+      "page": 1
+    }
+  ],
+  "model": "document-parse-260128",
+  "ocr": true,
+  "usage": {
+    "pages": 1,
+    "standard": [
+      1
+    ]
+  }
+}

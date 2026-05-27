@@ -1,0 +1,41 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Node
+web/frontend/node_modules/
+web/frontend/dist/
+
+# Data (DB, 쿠키, 수집 결과, 로그)
+data/
+output/
+logs/
+*.db
+
+# OCR 학습 데이터 (바이너리)
+*.traineddata
+
+# 임시 분석/디버그 스크립트 (루트만, __init__.py 제외)
+/_*.py
+
+# Claude Code 세션
+.claude/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 환경 변수
+.env
+.env.local

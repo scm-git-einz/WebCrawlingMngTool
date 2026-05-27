@@ -1,0 +1,61 @@
+﻿API Key: up_T1mGx...wlnR
+
+이미지: scripts/test_images/post_885130_img1.png (822,240 bytes)
+
+Upstage OCR API 호출 중...
+응답 코드: 200
+
+응답 키: ['apiVersion', 'confidence', 'metadata', 'mimeType', 'modelVersion', 'numBilledPages', 'pages', 'stored', 'text']
+
+=== OCR 추출 텍스트 ===
+11:41 
+← 위스키 
+전체 몰트 버번 그레인 블렌디 V 
+필터 1 품절제외 클리어런스 
+세일 세일 
+BlueLabel WALKER 
+JOHNNIE 
+allantines. 
+CESS WA 
+JOHNNIE 
+AGED 30 YEARS 
+Blue Label 
+Ballantines 
+30 
+10 한중국  
+HoBallontme 
+BaOkKBLKBe 
+발렌타인 조니워커 
+발렌타인 30년 700ml 조니워커 블루라벨 750ml 
+30% $447 35% $227 
+$312.9 470,445원 $147.55 221,841원 
+세일 세일 
+EST? 1892 
+SINGLE MALT SCOTCH WHISKY 
+istilledat 
+THE BALVENIE 
+Distilliry Bangline Glenfiddich. 
+SCOTLAND 
+GOLDEN CASK 
+ENISHED IN RUM SEASONED CASES GRAN CORTES 
+AGED 12 YEARS XXII 
+SINGLE MALT SCOTCH WHISKY 
+THE BALVENIE 
+Wive 
+문화 GOLDEN CASH 
+12 ····· Glenfiddich. 
+Hittern Botche GRAN CORTES 
+The XX 11 
+DED 22 
+Twem 
+ONGLE MALT SCOTCH WHISKY SINGLE MALT SCOTCH WHISKY 
+HANG SHERRY CASK FINISM RARE SHERRY CASK FINISH 
+22 
+the PROBECT OF SENTURN GrOu of SCOTLAND 
+7td Thale K7Kal 44.2%alc./ml 
+발베니 글렌피딕 
+발베니 12 골든럼 캐스크 700ml 글렌피딕 22년 그랑 코르테즈 7
+
+결과 저장: scripts/test_images/ocr_result.json
+
+Done!

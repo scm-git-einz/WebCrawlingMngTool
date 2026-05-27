@@ -1,0 +1,8 @@
+﻿[browser] Stealth Chromium 브라우저 시작...
+[browser] 브라우저 준비 완료
+이미지 수: 1
+[1] 1125x2436 | https://cafeptthumb-phinf.pstatic.net/MjAyNjA1MjVfMzUg/MDAxNzc5Njc3MDEwNDU5.7rKbdu69M1yflDHUZy_TY4GTePwu2BE1w8ofOySO7pQg
+  다운로드 완료: scripts/test_images/post_885130_img1.png (822,240 bytes)
+[browser] 브라우저 종료
+
+Done!

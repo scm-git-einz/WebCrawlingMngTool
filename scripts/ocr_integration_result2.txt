@@ -1,0 +1,53 @@
+﻿[browser] Stealth Chromium 브라우저 시작...
+[browser] 브라우저 준비 완료
+테스트 URL: https://cafe.naver.com/ca-fe/cafes/14538121/articles/885130?fromPopular=true
+
+제목: 위린이 신세계 면세 술 추천해주세용 ㅠㅠ
+본문 가격 (JS): 0건
+이미지: 1개
+
+=== OCR 실행 ===
+
+[이미지 1] https://cafeptthumb-phinf.pstatic.net/MjAyNjA1MjVfMzUg/MDAxNzc5Njc3MDEwNDU5.7rKb...
+OCR 텍스트 (845자):
+11:41 
+← 위스키 
+전체 몰트 버번 그레인 블렌디 V 
+필터 1 품절제외 클리어런스 
+세일 세일 
+BlueLabel WALKER 
+JOHNNIE 
+allantines. 
+CESS WA 
+JOHNNIE 
+AGED 30 YEARS 
+Blue Label 
+Ballantines 
+30 
+10 한중국  
+HoBallontme 
+BaOkKBLKBe 
+발렌타인 조니워커 
+발렌타인 30년 700ml 조니워커 블루라벨 750ml 
+30% $447 35% $227 
+$312.9 470,445원 $147.55 221,841원 
+세일 세일 
+EST? 1892 
+SINGLE MALT SCOTCH WHISKY 
+istilledat 
+THE BALVENIE 
+Distilliry Bangline Glenfiddich. 
+SCOTLAND 
+GOLDEN CASK 
+ENISHED IN RUM SEASONED CASES GRAN CORTES 
+AGED 12 YEARS XXII 
+SINGLE MALT SCOTCH 
+
+추출된 가격-상품명 (2건):
+  → 상품: '발렌타인 30년 700ml 조니워커 블루라벨 750ml' | 가격: 470,445원
+     컨텍스트: $312.9 470,445원 $147.55 221,841원
+  → 상품: '$312.9 470,445원 $147.55' | 가격: 221,841원
+     컨텍스트: $312.9 470,445원 $147.55 221,841원
+[browser] 브라우저 종료
+
+Done!
