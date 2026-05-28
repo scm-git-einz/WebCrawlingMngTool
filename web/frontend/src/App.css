@@ -557,11 +557,15 @@ select.form-control { cursor: pointer; }
   gap: 4px;
 }
 
+.product-table-scroll {
+  overflow-x: auto;
+  margin-top: 8px;
+}
+
 .price-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 12px;
-  margin-top: 8px;
 }
 
 .price-table th {
@@ -632,6 +636,62 @@ select.form-control { cursor: pointer; }
   font-size: 14px;
   cursor: pointer;
   margin-bottom: 0 !important;
+}
+
+/* ─── Detail Fields Grid ─── */
+.detail-fields-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 6px;
+}
+
+.detail-field-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+  background: var(--bg);
+}
+
+.detail-field-item:hover {
+  border-color: var(--primary);
+}
+
+.detail-field-item.checked {
+  background: var(--primary-bg, #eff6ff);
+  border-color: var(--primary);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.detail-field-item input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.btn-xs {
+  padding: 3px 10px;
+  font-size: 11px;
+  border-radius: 4px;
+}
+
+.btn-outline {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.btn-outline:hover {
+  border-color: var(--primary);
+  color: var(--primary);
 }
 
 /* ─── Crawl Mode Selector (단일 매장 / 도메인 전체) ─── */

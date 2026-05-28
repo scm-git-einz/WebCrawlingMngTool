@@ -1102,3 +1102,160 @@ ProductAgent에서 PromotionAgent를 분리해야 함.
 **수정된 파일**:
 - `web/frontend/src/pages/CrawlResults.jsx` (메인 레이아웃 + ResultRow 컴포넌트)
 - `web/frontend/src/App.css` (계층 뷰 스타일)
+
+---
+
+### Phase 19. 상세 수집 확장 필드 14종 + UI 설정
+> 상품 상세 페이지에서 가격/코드/혜택/프로모션 등 14종 필드를 수집하고, UI에서 수집 항목을 선택할 수 있도록 구현
+
+**사용자 요청**: 롯데면세점 상세 페이지에서 정상가(할인 전), 할인율, 판매가(할인 후), 최대혜택가 프로모션 정보를 수집. 상품 상세정보 수집 항목을 UI에서 체크박스로 선택 가능하게 수정.
+
+**작업 내역**:
+
+1. `agents/product/engine.py` — **Agent 확장 필드 구현**
+   - `DETAIL_FIELD_DEFS`: 상세 페이지 수집 가능 필드 14종 정의
+     - 기본 3종: description, detail_images, spec
+     - 코드 2종: product_code, reference_code
+     - 가격 5종: regular_price_usd/krw (할인 전 정상가), discount_rate, sale_price_usd/krw (할인 후 판매가)
+     - 프로모션: max_benefit_info (최대혜택가 영역 전체 구조화 텍스트 + 쿠폰 정보)
+     - 기타: category_breadcrumb, benefits, related_products
+   - `_DETAIL_ONLY_KEYS`: products.json 제외 대용량 필드 6종
+   - `_normalize_config()`: `detail_fields` 설정 항목 추가
+   - `_apply_detail()`: `detail_fields` 기반 동적 수집으로 리팩토링 (미설정 시 기존 3종 fallback)
+   - `_normalize_products()`: 확장 필드 14종 전달
+   - `_save_json()`: `_DETAIL_ONLY_KEYS` 상수 사용, detail_count 판정 확장
+
+2. `agents/product/engine.py` — **`_JS_EXTRACT_DETAIL` 확장** (기존 3종 → 14종 반환)
+   - 섹션 4: 카테고리 breadcrumb — breadcrumb 셀렉터 10종, a태그 우선 파싱, 매장안내 노이즈 필터링
+   - 섹션 5: 상품코드/레퍼런스코드 — dt-dd/th-td 패턴 + 합쳐진 코드 분리 (`_extractCodes` 헬퍼)
+   - 섹션 6: 가격 4단계 fallback
+     - 6-a: 롯데 특화 (`li.regular_price`, `#grdDscntRt`, `#grdSrpDscntAmt`)
+     - 6-b: 범용 라벨 매칭 (dt/th 텍스트 기반)
+     - 6-c: 가격 래퍼 fallback (`.cmpsPrice_pkg` 등)
+     - 6-d: del/s 태그 기반 fallback
+   - 섹션 6-e: 최대혜택가 (`dl[data-ganame="maxBenefit"]`) — dl 구조 파싱 + 쿠폰 정보
+   - 섹션 7: 구매혜택 — benefit/coupon/point 셀렉터
+   - 섹션 8: 관련상품 — together/related/recommend 셀렉터 + 노이즈 필터
+
+3. `web/frontend/src/pages/SiteSettings.jsx` — **UI 수집 항목 선택**
+   - `DETAIL_FIELD_DEFS` 상수 (14개 필드 key+label)
+   - ProductConfig: "상세 페이지 진입" 체크 시 detail_fields 체크박스 그리드 노출
+   - 전체 선택 / 전체 해제 버튼
+   - `detail_page` true + `detail_fields` 비어있으면 자동 전체 선택
+   - `handleSave`에 `detail_fields` payload 포함
+
+4. `web/frontend/src/App.css` — **스타일 추가**
+   - `.detail-fields-grid`: 반응형 그리드 (auto-fill, minmax 160px)
+   - `.detail-field-item`: 체크박스 카드 (checked 시 파란 하이라이트)
+   - `.btn-xs`, `.btn-outline`: 유틸리티 버튼
+
+5. `web/LOTTE_DETAIL_ANALYSIS.md` — **분석 문서** (신규)
+   - 롯데면세점 가격 영역 DOM 구조 상세 분석 (정상가/할인율/판매가/최대혜택가)
+   - 셀렉터 우선순위 + 범용 추출 전략 설계
+   - 할인/비할인 상품 테스트 결과
+
+**테스트 결과** (롯데면세점):
+- 할인 상품: 정상가 $35/52,776원, 할인율 30%, 판매가 $24.5/36,943원, 최대혜택가 전체 추출 — 모두 정상
+- 비할인 상품: 정상가 $200/301,580원, 할인/판매가 빈값 — 정상
+
+**수정된 파일**:
+- `agents/product/engine.py` (DETAIL_FIELD_DEFS + _JS_EXTRACT_DETAIL 확장 + _apply_detail 리팩토링)
+- `web/frontend/src/pages/SiteSettings.jsx` (detail_fields 체크박스 UI)
+- `web/frontend/src/App.css` (detail-fields-grid 스타일)
+- `web/LOTTE_DETAIL_ANALYSIS.md` (신규 — 가격 DOM 분석)
+
+---
+
+### Phase 19-1. detail_fields 미설정 시 전체 필드 수집 기본값 수정
+> detail_page=true인데 detail_fields가 비어 있으면 기존 3종 대신 전체 14종 수집하도록 수정
+
+**사용자 요청**: 롯데면세점 크롤링 실행 시 새로운 가격/코드 필드가 수집되지 않는 문제 확인 요청
+
+**원인 분석**:
+- `_JS_EXTRACT_DETAIL`은 14개 필드를 모두 추출하도록 구현 완료 상태
+- `_apply_detail()`에서 `detail_fields` 설정이 비어 있으면 기본 3종(description, detail_images, spec)만 수집
+- 사이트 DB 설정에 `detail_fields`가 저장되지 않아 항상 기본 3종 fallback 발생
+
+**수정 내역**:
+1. `agents/product/engine.py` — `_normalize_config()`
+   - `detail_page=true` + `detail_fields` 비어 있으면 `DETAIL_FIELD_DEFS` 전체 14종을 자동 설정
+   - UI에서 체크박스 전체 선택 기본값과 동일한 동작
+2. `agents/product/engine.py` — `_apply_detail()` fallback
+   - 기본 3종 → `DETAIL_FIELD_DEFS` 전체 14종으로 변경 (일관성)
+
+3. `web/frontend/src/pages/CrawlResults.jsx` — **수집 결과 상세 테이블 확장**
+   - ProductDetail 테이블 컬럼: `#, 이미지, 상품코드, 상품명, 브랜드, 정상가($), 정상가(원), 판매가($), 판매가(원), 할인율`
+   - `hasDetailPrices` 자동 감지: 상세 가격 데이터가 있으면 확장 컬럼, 없으면 기존 2컬럼(판매가/정가)
+   - "상세 가격 수집됨" 표시 라벨 추가
+   - 할인율 빨간색 강조 표시
+4. `web/frontend/src/App.css` — `.product-table-scroll` 가로 스크롤 래퍼 추가
+
+**수정된 파일**: `agents/product/engine.py`, `web/frontend/src/pages/CrawlResults.jsx`, `web/frontend/src/App.css`
+
+---
+
+### Phase 19-2. 면세점 3사 URL 변경 + 수집 결과 가격 표시 개선
+> 메인 홈페이지 → 랭킹/베스트 페이지로 URL 변경, 정상가/판매가 표시 로직 개선
+
+**사용자 요청**: 신라면세점 수집 데이터가 상품이 아닌 프로모션 배너 — URL 변경 필요. 정상가에 취소선, 판매가 없으면 정상가를 판매가에 표시.
+
+**원인 분석**: 3사 모두 메인 홈페이지 URL이 등록되어 있어 배너/기획전 카드를 상품으로 인식
+
+**수정 내역**:
+1. **면세점 3사 URL 변경** (DB 직접 수정)
+   - 롯데면세점(35): `/kr/shopmain/home` → `/kr/shopmain/rankingTrending/main`
+   - 신라면세점(36): `/estore/kr/ko/` → `/estore/kr/ko/ranking?XAREA=GNB`
+   - 현대면세점(37): `/shop/dm/main.do` → `/shop/dm/best/monthly.do`
+2. **수집 결과 가격 표시 개선** (`CrawlResults.jsx`)
+   - 판매가 있을 때: 정상가에 취소선 + 연한 색상, 판매가 굵게 표시
+   - 판매가 없을 때: 정상가를 판매가 컬럼에 표시 (정상가 컬럼은 취소선 없이 유지)
+
+**수정된 파일**: `web/frontend/src/pages/CrawlResults.jsx`, DB(crawl_sites.site_url)
+
+---
+
+### Phase 19-3. 신라면세점 상세 추출 셀렉터 추가
+> 신라면세점 전용 HTML 구조에 맞는 코드/가격 추출 로직 추가
+
+**사용자 요청**: 신라면세점의 상세 페이지 HTML 구조가 롯데면세점과 다름. 레퍼런스코드, 상품코드, 정상가/할인가(USD/KRW)에 대한 전용 셀렉터 필요.
+
+**원인 분석**: 기존 `_JS_EXTRACT_DETAIL`은 롯데면세점 특화(6-a)만 있고, 신라면세점은 완전히 다른 ID/클래스 구조 사용
+- 코드: `.product_number > ul > li` 안에 `.number_title`(REF.NO/SKU.NO) + `.number_text`
+- 정상가: `#salePrice`(USD), `#salePriceWon`(KRW) — 신라는 salePrice가 실제 정상가
+- 할인율: `span.rate`
+- 할인가: `#mileageDcPrice`(USD), `#mileageDcPriceWon`(KRW)
+
+**수정 내역**:
+1. **섹션 5-a 추가** — 신라면세점 코드 추출 (`agents/product/engine.py`)
+   - `.product_number` 내 `li` 순회 → `.number_title`로 REF.NO/SKU.NO 구분
+   - REF.NO → `reference_code`, SKU.NO → `product_code`
+2. **섹션 6-a2 추가** — 신라면세점 가격 추출 (`agents/product/engine.py`)
+   - `#salePrice` / `#salePriceWon` → `regular_price_usd` / `regular_price_krw`
+   - `span.rate` → `discount_rate`
+   - `#mileageDcPrice` / `#mileageDcPriceWon` → `sale_price_usd` / `sale_price_krw`
+   - `data-value` 속성 우선, innerText fallback
+
+**수정된 파일**: `agents/product/engine.py` (_JS_EXTRACT_DETAIL 섹션 5-a, 6-a2)
+
+---
+
+### Phase 19-4. 현대면세점 상세 추출 셀렉터 추가
+> 현대면세점 전용 HTML 구조에 맞는 코드/할인율 추출 로직 추가
+
+**사용자 요청**: 현대면세점(37) 상세 수집 시 할인율, 레퍼런스코드, 상품코드가 수집되지 않음
+
+**원인 분석**: 현대면세점은 고유한 HTML 클래스 사용
+- 할인율: `<span class="sale_percent"><em>30</em></span>` (숫자만, % 없음)
+- 레퍼런스: `<li class="ref">REF NO. : <span>값</span></li>`
+- 상품코드: `<li class="sku">SKU NO. : <span>값</span></li>`
+
+**수정 내역**:
+1. **섹션 5-a2 추가** — 현대면세점 코드 추출 (`agents/product/engine.py`)
+   - `li.ref > span` → `reference_code`
+   - `li.sku > span` → `product_code`
+   - span이 없을 경우 텍스트 정규식 fallback
+2. **섹션 6-a 할인율 확장** — 현대면세점 할인율 (`agents/product/engine.py`)
+   - `span.sale_percent em` → 숫자만 있으면 `%` 자동 추가
+   - 기존 롯데(`#grdDscntRt`) / 신라(`span.rate`) 이후 fallback으로 동작
+
+**수정된 파일**: `agents/product/engine.py` (_JS_EXTRACT_DETAIL 섹션 5-a2, 6-a 할인율)

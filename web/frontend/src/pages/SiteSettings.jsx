@@ -850,6 +850,23 @@ const PAGINATION_OPTIONS = [
   { value: 'none',   label: '단일 페이지', desc: '현재 페이지만 수집' },
 ]
 
+const DETAIL_FIELD_DEFS = [
+  { key: 'category_breadcrumb', label: '카테고리 경로' },
+  { key: 'reference_code',      label: '레퍼런스코드' },
+  { key: 'product_code',        label: '상품코드' },
+  { key: 'regular_price_usd',   label: '정상가(달러)' },
+  { key: 'regular_price_krw',   label: '정상가(원화)' },
+  { key: 'discount_rate',       label: '할인율' },
+  { key: 'sale_price_usd',      label: '판매가(달러)' },
+  { key: 'sale_price_krw',      label: '판매가(원화)' },
+  { key: 'max_benefit_info',    label: '최대혜택가(프로모션)' },
+  { key: 'benefits',            label: '구매혜택' },
+  { key: 'related_products',    label: '관련상품' },
+  { key: 'description',         label: '상품설명' },
+  { key: 'detail_images',       label: '상세이미지' },
+  { key: 'spec',                label: '제품스펙' },
+]
+
 function ProductConfig({ site, onSaved, showConfirm, closeConfirm }) {
   const [config, setConfig] = useState(() => {
     const c = site.config || {}
@@ -862,6 +879,9 @@ function ProductConfig({ site, onSaved, showConfirm, closeConfirm }) {
       max_items: c.max_items ?? 100,
       item_limit_type: (c.max_items === 0 || c.max_items === undefined) ? 'all' : 'n',
       detail_page: c.detail_page ?? false,
+      detail_fields: (c.detail_fields && c.detail_fields.length > 0)
+        ? c.detail_fields
+        : (c.detail_page ? DETAIL_FIELD_DEFS.map(f => ({ key: f.key })) : []),
       extra_fields: c.extra_fields || [],
     }
   })
@@ -909,6 +929,7 @@ function ProductConfig({ site, onSaved, showConfirm, closeConfirm }) {
             max_pages: config.max_pages,
             max_items: config.item_limit_type === 'all' ? 0 : config.max_items,
             detail_page: config.detail_page,
+            detail_fields: config.detail_fields,
           }
           if (extraFields.length > 0) payload.extra_fields = extraFields
           const res = await fetch(`/api/sites/${site.id}/config`, {
@@ -1100,10 +1121,62 @@ function ProductConfig({ site, onSaved, showConfirm, closeConfirm }) {
           <input
             type="checkbox" id="detail_page"
             checked={!!config.detail_page}
-            onChange={e => setConfig({ ...config, detail_page: e.target.checked })}
+            onChange={e => {
+              const checked = e.target.checked
+              if (checked && config.detail_fields.length === 0) {
+                setConfig({ ...config, detail_page: true,
+                  detail_fields: DETAIL_FIELD_DEFS.map(f => ({ key: f.key }))
+                })
+              } else {
+                setConfig({ ...config, detail_page: checked })
+              }
+            }}
           />
           <label htmlFor="detail_page">상세 페이지 진입 (상품별 상세 정보 수집)</label>
         </div>
+        {config.detail_page && (
+          <div className="detail-fields-panel" style={{marginTop:12}}>
+            <div style={{fontSize:12,color:'var(--text-secondary)',marginBottom:8}}>
+              수집할 상세 정보를 선택하세요
+            </div>
+            <div className="detail-fields-grid">
+              {DETAIL_FIELD_DEFS.map(fd => {
+                const checked = config.detail_fields.some(
+                  f => (typeof f === 'string' ? f : f.key) === fd.key
+                )
+                return (
+                  <label key={fd.key} className={`detail-field-item${checked ? ' checked' : ''}`}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={e => {
+                        const newFields = e.target.checked
+                          ? [...config.detail_fields, { key: fd.key }]
+                          : config.detail_fields.filter(
+                              f => (typeof f === 'string' ? f : f.key) !== fd.key
+                            )
+                        setConfig({ ...config, detail_fields: newFields })
+                      }}
+                    />
+                    <span>{fd.label}</span>
+                  </label>
+                )
+              })}
+            </div>
+            <div style={{display:'flex',gap:8,marginTop:8}}>
+              <button
+                type="button" className="btn btn-xs btn-outline"
+                onClick={() => setConfig({ ...config,
+                  detail_fields: DETAIL_FIELD_DEFS.map(f => ({ key: f.key }))
+                })}
+              >전체 선택</button>
+              <button
+                type="button" className="btn btn-xs btn-outline"
+                onClick={() => setConfig({ ...config, detail_fields: [] })}
+              >전체 해제</button>
+            </div>
+          </div>
+        )}
       </div>
 
       <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:20}}>

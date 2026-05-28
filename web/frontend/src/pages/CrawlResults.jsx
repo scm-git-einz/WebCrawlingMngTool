@@ -286,43 +286,33 @@ function ProductDetail({ detail }) {
   const storeName = storeInfo.store_name || storeInfo.name || ''
   const hasStore = storeName && storeName !== 'N/A'
 
-  // 상품 필드 헬퍼: agent가 저장하는 다양한 필드명에 대응
   const getName = (p) => p.product_name || p.name || p.title || p.goodsNm || ''
   const getBrand = (p) => p.brand_name || p.brand || ''
-  const getPrice = (p) => {
-    const v = p.selling_price ?? p.price ?? p.sale_price ?? p.salePrice ?? null
-    if (v === null || v === '') return '-'
+  const getImage = (p) => p.image_url || p.imageUrl || p.img || ''
+  const getUrl = (p) => p.product_url || p.url || p.link || ''
+  const getCode = (p) => p.product_code || p.product_id || ''
+  const fmtPrice = (v) => {
+    if (v === null || v === undefined || v === '') return '-'
     if (typeof v === 'number') return v.toLocaleString()
     return String(v).length > 40 ? '-' : String(v)
   }
-  const getOrigPrice = (p) => {
-    const v = p.original_price ?? p.retail_price ?? p.listPrice ?? null
-    if (v === null || v === '' || v === 0) return ''
-    if (typeof v === 'number') return v.toLocaleString()
-    return String(v).length > 40 ? '' : String(v)
-  }
-  const getImage = (p) => p.image_url || p.imageUrl || p.img || ''
-  const getUrl = (p) => p.product_url || p.url || p.link || ''
+
+  const hasDetailPrices = products.some(p =>
+    p.regular_price_usd || p.regular_price_krw || p.sale_price_usd || p.sale_price_krw
+  )
 
   return (
     <>
-      {/* 매장 정보 카드 */}
       {hasStore && (
         <div className="store-info-card">
           {storeInfo.logo_url && (
-            <img
-              src={storeInfo.logo_url}
-              alt="logo"
-              className="store-logo"
-              onError={e => { e.target.style.display = 'none' }}
-            />
+            <img src={storeInfo.logo_url} alt="logo" className="store-logo"
+              onError={e => { e.target.style.display = 'none' }} />
           )}
           <div className="store-info-body">
             <div className="store-info-name">{storeName}</div>
             {storeInfo.description && (
-              <div className="store-info-desc">
-                {String(storeInfo.description).slice(0, 120)}
-              </div>
+              <div className="store-info-desc">{String(storeInfo.description).slice(0, 120)}</div>
             )}
             <div className="store-info-meta">
               {storeInfo.category && <span>카테고리: {storeInfo.category}</span>}
@@ -340,59 +330,110 @@ function ProductDetail({ detail }) {
 
       <div style={{display:'flex',gap:24,marginBottom:16,fontSize:13,color:'var(--text-secondary)'}}>
         <span>총 상품: <strong>{products.length}</strong>개</span>
+        {hasDetailPrices && <span style={{color:'var(--success)'}}>상세 가격 수집됨</span>}
       </div>
 
       {products.length > 0 ? (
-        <table className="price-table">
-          <thead>
-            <tr>
-              <th style={{width:40}}>#</th>
-              <th style={{width:50}}>이미지</th>
-              <th>상품명</th>
-              <th>브랜드</th>
-              <th>판매가</th>
-              <th>정가</th>
-            </tr>
-          </thead>
-          <tbody>
-            {products.slice(0, 100).map((p, i) => {
-              const name = getName(p)
-              const url = getUrl(p)
-              const img = getImage(p)
-              return (
-                <tr key={i}>
-                  <td style={{color:'var(--text-secondary)'}}>{i + 1}</td>
-                  <td>
-                    {img ? (
-                      <img
-                        src={img}
-                        alt=""
-                        style={{width:40,height:40,objectFit:'cover',borderRadius:4,background:'#f5f5f5'}}
-                        onError={e => { e.target.style.display = 'none' }}
-                      />
+        <div className="product-table-scroll">
+          <table className="price-table">
+            <thead>
+              <tr>
+                <th style={{width:40}}>#</th>
+                <th style={{width:50}}>이미지</th>
+                <th style={{minWidth:100}}>상품코드</th>
+                <th style={{minWidth:180}}>상품명</th>
+                <th style={{minWidth:80}}>브랜드</th>
+                {hasDetailPrices ? (
+                  <>
+                    <th style={{minWidth:80}}>정상가($)</th>
+                    <th style={{minWidth:90}}>정상가(원)</th>
+                    <th style={{minWidth:80}}>판매가($)</th>
+                    <th style={{minWidth:90}}>판매가(원)</th>
+                    <th style={{width:50}}>할인율</th>
+                  </>
+                ) : (
+                  <>
+                    <th>판매가</th>
+                    <th>정가</th>
+                  </>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {products.slice(0, 100).map((p, i) => {
+                const name = getName(p)
+                const url = getUrl(p)
+                const img = getImage(p)
+                return (
+                  <tr key={i}>
+                    <td style={{color:'var(--text-secondary)'}}>{p.rank || i + 1}</td>
+                    <td>
+                      {img ? (
+                        <img src={img} alt=""
+                          style={{width:40,height:40,objectFit:'cover',borderRadius:4,background:'#f5f5f5'}}
+                          onError={e => { e.target.style.display = 'none' }} />
+                      ) : (
+                        <div style={{width:40,height:40,background:'#f0f0f0',borderRadius:4}} />
+                      )}
+                    </td>
+                    <td style={{fontSize:11,color:'var(--text-secondary)',fontFamily:'monospace'}}>
+                      {getCode(p) || '-'}
+                    </td>
+                    <td style={{fontWeight:600,maxWidth:280,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                      {url && !url.startsWith('javascript') ? (
+                        <a href={url} target="_blank" rel="noreferrer" style={{color:'var(--text)',textDecoration:'none'}}>
+                          {name || '-'}
+                        </a>
+                      ) : (name || '-')}
+                    </td>
+                    <td style={{fontSize:12}}>{getBrand(p) || '-'}</td>
+                    {hasDetailPrices ? (
+                      <>
+                        {(() => {
+                          const hasSaleUsd = p.sale_price_usd && p.sale_price_usd !== '-'
+                          const hasSaleKrw = p.sale_price_krw && p.sale_price_krw !== '-'
+                          const regUsd = fmtPrice(p.regular_price_usd)
+                          const regKrw = fmtPrice(p.regular_price_krw)
+                          return <>
+                            <td style={{whiteSpace:'nowrap',fontSize:12,
+                              textDecoration: hasSaleUsd ? 'line-through' : 'none',
+                              color: hasSaleUsd ? 'var(--text-secondary)' : 'inherit'}}>
+                              {regUsd}
+                            </td>
+                            <td style={{whiteSpace:'nowrap',fontSize:12,
+                              textDecoration: hasSaleKrw ? 'line-through' : 'none',
+                              color: hasSaleKrw ? 'var(--text-secondary)' : 'inherit'}}>
+                              {regKrw}
+                            </td>
+                            <td style={{whiteSpace:'nowrap',fontWeight:600}}>
+                              {hasSaleUsd ? fmtPrice(p.sale_price_usd) : regUsd}
+                            </td>
+                            <td style={{whiteSpace:'nowrap',fontWeight:600}}>
+                              {hasSaleKrw ? fmtPrice(p.sale_price_krw) : regKrw}
+                            </td>
+                          </>
+                        })()}
+                        <td style={{whiteSpace:'nowrap',fontSize:12,color: p.discount_rate ? 'var(--danger)' : 'var(--text-secondary)'}}>
+                          {p.discount_rate || '-'}
+                        </td>
+                      </>
                     ) : (
-                      <div style={{width:40,height:40,background:'#f0f0f0',borderRadius:4}} />
+                      <>
+                        <td style={{fontWeight:600,whiteSpace:'nowrap'}}>
+                          {fmtPrice(p.selling_price ?? p.price ?? p.sale_price ?? p.salePrice)}
+                        </td>
+                        <td style={{fontSize:12,color:'var(--text-secondary)',whiteSpace:'nowrap',
+                          textDecoration: (p.original_price ?? p.retail_price ?? p.listPrice) ? 'line-through' : 'none'}}>
+                          {fmtPrice(p.original_price ?? p.retail_price ?? p.listPrice)}
+                        </td>
+                      </>
                     )}
-                  </td>
-                  <td style={{fontWeight:600,maxWidth:280,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-                    {url && !url.startsWith('javascript') ? (
-                      <a href={url} target="_blank" rel="noreferrer" style={{color:'var(--text)',textDecoration:'none'}}>
-                        {name || '-'}
-                      </a>
-                    ) : (name || '-')}
-                  </td>
-                  <td style={{fontSize:12}}>{getBrand(p) || '-'}</td>
-                  <td style={{fontWeight:600,whiteSpace:'nowrap'}}>
-                    {getPrice(p)}
-                  </td>
-                  <td style={{fontSize:12,color:'var(--text-secondary)',whiteSpace:'nowrap',textDecoration: getOrigPrice(p) ? 'line-through' : 'none'}}>
-                    {getOrigPrice(p)}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       ) : (
         <div className="empty-state">수집된 상품이 없습니다</div>
       )}

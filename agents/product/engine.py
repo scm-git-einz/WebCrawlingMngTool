@@ -28,6 +28,28 @@ _TAG = "[product]"
 
 _DEFAULT_FIELDS = ["name", "price", "brand", "image"]
 
+# 상세 페이지 수집 가능 필드 정의
+DETAIL_FIELD_DEFS = [
+    {"key": "category_breadcrumb", "label": "카테고리 경로"},
+    {"key": "reference_code",      "label": "레퍼런스코드"},
+    {"key": "product_code",        "label": "상품코드"},
+    {"key": "regular_price_usd",   "label": "정상가(달러)"},
+    {"key": "regular_price_krw",   "label": "정상가(원화)"},
+    {"key": "discount_rate",       "label": "할인율"},
+    {"key": "sale_price_usd",      "label": "판매가(달러)"},
+    {"key": "sale_price_krw",      "label": "판매가(원화)"},
+    {"key": "max_benefit_info",    "label": "최대혜택가(프로모션)"},
+    {"key": "benefits",            "label": "구매혜택"},
+    {"key": "related_products",    "label": "관련상품"},
+    {"key": "description",         "label": "상품설명"},
+    {"key": "detail_images",       "label": "상세이미지"},
+    {"key": "spec",                "label": "제품스펙"},
+]
+
+# products.json에서 제외할 상세 전용 필드 (대용량)
+_DETAIL_ONLY_KEYS = ("description", "detail_images", "spec", "benefits",
+                     "related_products", "max_benefit_info")
+
 # 상품 데이터 키 이름 → 표준 필드 매핑
 _FIELD_ALIASES = {
     "name": ["name", "product_name", "productName", "goodsNm", "title",
@@ -87,6 +109,10 @@ class ProductAgent(BaseAgent):
         cfg.setdefault("max_pages", 5)
         cfg.setdefault("detail_page", False)
         cfg.setdefault("extra_fields", [])
+        cfg.setdefault("detail_fields", [])
+        # detail_page=true인데 detail_fields가 비어 있으면 전체 필드 수집
+        if cfg.get("detail_page") and not cfg["detail_fields"]:
+            cfg["detail_fields"] = [{"key": f["key"]} for f in DETAIL_FIELD_DEFS]
 
         if cfg.pop("item_limit_type", None) == "all":
             cfg["max_items"] = 0
@@ -111,6 +137,7 @@ class ProductAgent(BaseAgent):
         result_id = self.db.create_result(site_id)
         t0 = time.time()
         cfg = self._normalize_config(self.get_crawl_config(site))
+        self._cfg = cfg  # _apply_detail()에서 detail_fields 참조용
         url = site["site_url"]
 
         _log(f"수집 시작: {site['site_name']}  type={cfg['list_type']}  "
@@ -512,19 +539,50 @@ class ProductAgent(BaseAgent):
         return products
 
     def _apply_detail(self, prod: dict):
-        """현재 페이지에서 상세 정보를 추출하여 prod에 반영한다."""
+        """현재 페이지에서 상세 정보를 추출하여 prod에 반영한다.
+
+        detail_fields 설정에 따라 수집할 필드를 제한한다.
+        미설정 시 기본 3종(description, detail_images, spec)만 수집.
+        """
         detail = self.page.evaluate(_JS_EXTRACT_DETAIL)
         if not detail:
             return
-        if detail.get("description"):
-            prod["description"] = detail["description"][:2000]
-        if detail.get("detail_images"):
-            prod["detail_images"] = detail["detail_images"][:20]
-        if detail.get("spec"):
-            prod["spec"] = detail["spec"]
-            if not prod.get("description") and detail["spec"]:
+
+        # 수집할 상세 필드 목록 결정
+        detail_fields = getattr(self, "_cfg", {}).get("detail_fields", [])
+        if not detail_fields:
+            detail_fields = [{"key": f["key"]} for f in DETAIL_FIELD_DEFS]
+
+        active_keys = {f["key"] if isinstance(f, dict) else f
+                       for f in detail_fields}
+
+        for key in active_keys:
+            val = detail.get(key)
+            if not val:
+                continue
+            if key == "description":
+                prod["description"] = val[:2000]
+            elif key == "detail_images":
+                prod["detail_images"] = val[:20]
+            elif key == "spec":
+                prod["spec"] = val
+            elif key == "related_products":
+                prod["related_products"] = val[:20] if isinstance(val, list) else val
+            elif key == "max_benefit_info":
+                prod["max_benefit_info"] = val[:1000] if isinstance(val, str) else val
+            elif isinstance(val, str):
+                prod[key] = val[:500]
+            elif isinstance(val, list):
+                prod[key] = val[:20]
+            else:
+                prod[key] = val
+
+        # description 자동 생성 (spec 기반 fallback)
+        if "description" in active_keys and not prod.get("description"):
+            spec = detail.get("spec")
+            if spec:
                 prod["description"] = " | ".join(
-                    f"{k}: {v}" for k, v in list(detail["spec"].items())[:5]
+                    f"{k}: {v}" for k, v in list(spec.items())[:5]
                 )[:500]
 
     # ══════════════════════════════════════════════════════════════
@@ -590,10 +648,15 @@ class ProductAgent(BaseAgent):
                 "%Y-%m-%dT%H:%M:%S"
             )
 
-            if raw.get("description"):
-                normalized["description"] = raw["description"]
-            if raw.get("detail_images"):
-                normalized["detail_images"] = raw["detail_images"]
+            # 상세 수집 필드 전달
+            for dk in ("description", "detail_images", "spec",
+                       "category_breadcrumb", "reference_code", "product_code",
+                       "regular_price_usd", "regular_price_krw",
+                       "discount_rate", "sale_price_usd", "sale_price_krw",
+                       "max_benefit_info",
+                       "benefits", "related_products"):
+                if raw.get(dk):
+                    normalized[dk] = raw[dk]
 
             result.append(normalized)
 
@@ -618,16 +681,16 @@ class ProductAgent(BaseAgent):
         )
         os.makedirs(output_dir, exist_ok=True)
 
-        # 기본 상품 목록 (상세 정보 제외)
-        _detail_keys = ("description", "detail_images", "spec")
+        # 기본 상품 목록 (대용량 상세 정보 제외)
         basic_products = []
         for p in products:
-            basic = {k: v for k, v in p.items() if k not in _detail_keys}
+            basic = {k: v for k, v in p.items() if k not in _DETAIL_ONLY_KEYS}
             basic_products.append(basic)
 
         detail_count = sum(
             1 for p in products
             if p.get("description") or p.get("detail_images") or p.get("spec")
+               or p.get("reference_code") or p.get("regular_price_usd")
         )
 
         result = {
@@ -1125,7 +1188,396 @@ _JS_EXTRACT_DETAIL = r"""(() => {
         }
     }
 
-    return {description: desc, detail_images: imgs, spec: spec};
+    /* ── 4. 카테고리 breadcrumb (category_breadcrumb) ── */
+    var breadcrumb = '';
+    var bcSels = [
+        '.location_area', '.breadcrumb', '.path_area',
+        '[class*="breadcrumb"]', '[class*="location"]', '[class*="path"]',
+        'nav[aria-label*="breadcrumb"]', '.gnb_area .path',
+        '.cmpsTit_pkg .location', '.locationWrap'
+    ];
+    var BC_NOISE = /위치안내|현재위치|닫기|열기|^\s*$/;
+    var BC_STORE = /\d{2,3}-\d{3,4}-\d{4}|\d{2}:\d{2}\s*~|터미널|층\s|매장안내|영업시간/;
+    for (var bi = 0; bi < bcSels.length; bi++) {
+        var bcEl = document.querySelector(bcSels[bi]);
+        if (bcEl && bcEl.innerText && bcEl.innerText.trim().length > 3) {
+            var bcFullText = bcEl.innerText.trim();
+            /* 매장 안내 영역이면 건너뛰기 (전화번호/영업시간 포함 or 텍스트 300자 초과) */
+            if (BC_STORE.test(bcFullText) || bcFullText.length > 300) continue;
+            /* a 태그 우선 (실제 카테고리 링크) */
+            var bcLinks = bcEl.querySelectorAll('a');
+            var parts = [];
+            for (var bj = 0; bj < bcLinks.length; bj++) {
+                var t = bcLinks[bj].innerText.trim();
+                if (t && t.length > 0 && t.length < 30 &&
+                    parts.indexOf(t) === -1 && !BC_NOISE.test(t)) {
+                    parts.push(t);
+                }
+            }
+            /* a 태그가 부족하면 span/li 포함 */
+            if (parts.length < 2) {
+                parts = [];
+                var bcAll = bcEl.querySelectorAll('a, span, li');
+                for (var bk = 0; bk < bcAll.length; bk++) {
+                    var t2 = bcAll[bk].innerText.trim();
+                    if (t2 && t2.length > 0 && t2.length < 30 &&
+                        parts.indexOf(t2) === -1 && !BC_NOISE.test(t2)) {
+                        parts.push(t2);
+                    }
+                }
+            }
+            /* 최대 6단계로 제한 */
+            if (parts.length > 6) parts = parts.slice(0, 6);
+            if (parts.length >= 2) {
+                breadcrumb = parts.join(' > ');
+            } else {
+                breadcrumb = bcEl.innerText.trim()
+                    .replace(/위치안내[^\n]*/g, '').replace(/[\t ]*\n+[\t ]*/g, ' > ')
+                    .replace(/ > ( > )+/g, ' > ').replace(/^\s*>\s*|\s*>\s*$/g, '').trim();
+            }
+            if (breadcrumb.length > 3) break;
+        }
+    }
+
+    /* ── 5. 상품코드 / 레퍼런스코드 (product_code, reference_code) ── */
+    var productCode = '';
+    var referenceCode = '';
+    var bodyText = document.body.innerText || '';
+
+    /* 텍스트에서 코드를 분리 추출하는 헬퍼 */
+    function _extractCodes(text) {
+        var rc = text.match(/레퍼런스[\s]*코드[\s:：]*([A-Z0-9\-]+)/i);
+        var pc = text.match(/상품[\s]*코드[\s:：]*([A-Z0-9\-]+)/i);
+        return {ref: rc ? rc[1] : '', prd: pc ? pc[1] : ''};
+    }
+
+    /* 5-a: 신라면세점 특화 — .product_number 내 REF.NO / SKU.NO */
+    var pnumEl = document.querySelector('.product_number');
+    if (pnumEl) {
+        var pnumLis = pnumEl.querySelectorAll('li');
+        for (var pni = 0; pni < pnumLis.length; pni++) {
+            var titleEl = pnumLis[pni].querySelector('.number_title');
+            var textEl = pnumLis[pni].querySelector('.number_text');
+            if (!titleEl || !textEl) continue;
+            var pnTitle = titleEl.innerText.trim();
+            var pnText = textEl.innerText.trim();
+            if (/REF|레퍼런스/i.test(pnTitle) && pnText && !referenceCode) {
+                referenceCode = pnText.substring(0, 50);
+            }
+            if (/SKU|상품코드|품목/i.test(pnTitle) && pnText && !productCode) {
+                productCode = pnText.replace(/[^A-Z0-9\-]/gi, '').substring(0, 50);
+            }
+        }
+    }
+
+    /* 5-a2: 현대면세점 특화 — li.ref / li.sku */
+    var hdRefEl = document.querySelector('li.ref');
+    var hdSkuEl = document.querySelector('li.sku');
+    if (hdRefEl && !referenceCode) {
+        var hdRefSpan = hdRefEl.querySelector('span');
+        if (hdRefSpan) {
+            referenceCode = hdRefSpan.innerText.trim().substring(0, 50);
+        } else {
+            var hdRefM = hdRefEl.innerText.match(/REF\s*(?:NO\.?)?\s*[：:]\s*(\S+)/i);
+            if (hdRefM) referenceCode = hdRefM[1].substring(0, 50);
+        }
+    }
+    if (hdSkuEl && !productCode) {
+        var hdSkuSpan = hdSkuEl.querySelector('span');
+        if (hdSkuSpan) {
+            productCode = hdSkuSpan.innerText.trim().replace(/[^A-Z0-9\-]/gi, '').substring(0, 50);
+        } else {
+            var hdSkuM = hdSkuEl.innerText.match(/SKU\s*(?:NO\.?)?\s*[：:]\s*(\S+)/i);
+            if (hdSkuM) productCode = hdSkuM[1].replace(/[^A-Z0-9\-]/gi, '').substring(0, 50);
+        }
+    }
+
+    /* 5-b: dt-dd 패턴 */
+    var allDts = document.querySelectorAll('dt');
+    for (var dti = 0; dti < allDts.length; dti++) {
+        var dtText = allDts[dti].innerText.trim();
+        var ddEl = allDts[dti].nextElementSibling;
+        if (!ddEl) continue;
+        var ddText = ddEl.innerText.trim();
+        /* dd 안에 여러 코드가 합쳐진 경우 분리 */
+        if (/레퍼런스.*코드.*상품.*코드|상품.*코드.*레퍼런스/i.test(ddText)) {
+            var codes = _extractCodes(ddText);
+            if (codes.ref && !referenceCode) referenceCode = codes.ref;
+            if (codes.prd && !productCode) productCode = codes.prd;
+            continue;
+        }
+        if (/상품코드|품목코드|Item\s*Code/i.test(dtText) && ddText && !productCode) {
+            productCode = ddText.replace(/[^A-Z0-9\-]/gi, '').substring(0, 50);
+        }
+        if (/레퍼런스|Ref(?:erence)?\s*(?:Code|No)?/i.test(dtText) && ddText && !referenceCode) {
+            referenceCode = ddText.replace(/[^A-Z0-9\-]/gi, '').substring(0, 50);
+        }
+    }
+    /* th-td 패턴 */
+    if (!productCode || !referenceCode) {
+        var allThs = document.querySelectorAll('th');
+        for (var thi = 0; thi < allThs.length; thi++) {
+            var thText = allThs[thi].innerText.trim();
+            var tdNext = allThs[thi].parentElement ? allThs[thi].parentElement.querySelector('td') : null;
+            if (!tdNext) continue;
+            var tdText = tdNext.innerText.trim();
+            if (!productCode && /상품코드|품목코드/i.test(thText) && tdText) {
+                productCode = tdText.substring(0, 50);
+            }
+            if (!referenceCode && /레퍼런스|Ref/i.test(thText) && tdText) {
+                referenceCode = tdText.substring(0, 50);
+            }
+        }
+    }
+    /* 텍스트 정규식 fallback */
+    if (!productCode) {
+        var pcm = bodyText.match(/상품[\s]*코드[\s:：]*([A-Z0-9\-]+)/i);
+        if (pcm) productCode = pcm[1];
+    }
+    if (!referenceCode) {
+        var rcm = bodyText.match(/레퍼런스[\s]*코드[\s:：]*([A-Z0-9\-]+)/i);
+        if (!rcm) rcm = bodyText.match(/[Rr]ef(?:erence)?[\s.]*(?:[Cc]ode|[Nn]o)?[\s:：.]*([A-Z0-9\-\.]+)/);
+        if (rcm) referenceCode = rcm[1];
+    }
+
+    /* ── 6. 가격: 정상가 / 할인율 / 판매가 ── */
+    var regularPriceUsd = '', regularPriceKrw = '';
+    var discountRate = '';
+    var salePriceUsd = '', salePriceKrw = '';
+
+    /* 6-a: 롯데면세점 특화 — li.regular_price + ID 기반 */
+    var regPriceEl = document.querySelector('li.regular_price');
+    if (regPriceEl) {
+        var regSpans = regPriceEl.querySelectorAll('span');
+        for (var rsi = 0; rsi < regSpans.length; rsi++) {
+            var rsText = regSpans[rsi].innerText.trim();
+            var ruM = rsText.match(/\$([\d,\.]+)/);
+            var rkM = rsText.match(/([\d,]+)\s*원|^\(([\d,]+)원\)$/);
+            if (ruM && !regularPriceUsd) regularPriceUsd = '$' + ruM[1];
+            if (rkM && !regularPriceKrw) {
+                var kwVal = rkM[1] || rkM[2];
+                regularPriceKrw = kwVal + '원';
+            }
+        }
+    }
+    var rateEl = document.querySelector('#grdDscntRt, strong.rate');
+    if (rateEl) {
+        var rateText = rateEl.innerText.trim();
+        if (/\d+%/.test(rateText)) discountRate = rateText;
+    }
+    /* 현대면세점 할인율 — span.sale_percent > em */
+    if (!discountRate) {
+        var hdRateEl = document.querySelector('span.sale_percent em, span.sale_percent');
+        if (hdRateEl) {
+            var hdRateText = hdRateEl.innerText.trim().replace(/\s+/g, '');
+            if (/^\d+$/.test(hdRateText)) discountRate = hdRateText + '%';
+            else if (/\d+%/.test(hdRateText)) discountRate = hdRateText.match(/(\d+%)/)[1];
+        }
+    }
+    var saleUsdEl = document.querySelector('#grdSrpDscntAmt');
+    var saleKrwEl = document.querySelector('#grdGlblDscntAmt');
+    if (saleUsdEl) {
+        var suM = saleUsdEl.innerText.trim().match(/\$([\d,\.]+)/);
+        if (suM) salePriceUsd = '$' + suM[1];
+    }
+    if (saleKrwEl) {
+        var skM = saleKrwEl.innerText.trim().match(/([\d,]+)\s*원|^\(([\d,]+)원\)/);
+        if (skM) salePriceKrw = (skM[1] || skM[2]) + '원';
+    }
+
+    /* 6-a2: 신라면세점 특화 — #salePrice / #mileageDcPrice 기반 */
+    if (!regularPriceUsd && !regularPriceKrw) {
+        var shillaRegUsd = document.querySelector('#salePrice');
+        var shillaRegKrw = document.querySelector('#salePriceWon');
+        if (shillaRegUsd || shillaRegKrw) {
+            if (shillaRegUsd) {
+                var sruVal = (shillaRegUsd.getAttribute('data-value') || shillaRegUsd.innerText).trim();
+                var sruM = sruVal.match(/\$?([\d,\.]+)/);
+                if (sruM) regularPriceUsd = '$' + sruM[1];
+            }
+            if (shillaRegKrw) {
+                var srkVal = (shillaRegKrw.getAttribute('data-value') || shillaRegKrw.innerText).trim();
+                var srkM = srkVal.match(/([\d,]+)/);
+                if (srkM) regularPriceKrw = srkM[1] + '원';
+            }
+            /* 할인율 — span.rate */
+            var shillaRate = document.querySelector('span.rate, .discount_rate .rate');
+            if (shillaRate && !discountRate) {
+                var srText = shillaRate.innerText.trim();
+                if (/\d+%/.test(srText)) discountRate = srText;
+            }
+            /* 할인가 */
+            var shillaSaleUsd = document.querySelector('#mileageDcPrice');
+            var shillaSaleKrw = document.querySelector('#mileageDcPriceWon');
+            if (shillaSaleUsd) {
+                var ssuVal = (shillaSaleUsd.getAttribute('data-value') || shillaSaleUsd.innerText).trim();
+                var ssuM = ssuVal.match(/\$?([\d,\.]+)/);
+                if (ssuM) salePriceUsd = '$' + ssuM[1];
+            }
+            if (shillaSaleKrw) {
+                var sskVal = (shillaSaleKrw.getAttribute('data-value') || shillaSaleKrw.innerText).trim();
+                var sskM = sskVal.match(/([\d,]+)/);
+                if (sskM) salePriceKrw = sskM[1] + '원';
+            }
+        }
+    }
+
+    /* 6-b: 범용 라벨 매칭 fallback */
+    if (!regularPriceUsd && !regularPriceKrw) {
+        var priceLabels = document.querySelectorAll('dt, th, .label, .tit, [class*="tit"]');
+        for (var pi = 0; pi < priceLabels.length; pi++) {
+            var plText = priceLabels[pi].innerText.trim();
+            var pNext = priceLabels[pi].nextElementSibling;
+            if (!pNext) continue;
+            var pVal = pNext.innerText.trim().replace(/\s+/g, ' ');
+            if (!pVal || /로그인|login/i.test(pVal)) continue;
+
+            if (/정상가|정가|retail|original/i.test(plText) && !/세일|할인|판매/i.test(plText)) {
+                var usdM = pVal.match(/\$([\d,\.]+)/);
+                var krwM = pVal.match(/([\d,]+)\s*원/);
+                if (usdM && !regularPriceUsd) regularPriceUsd = '$' + usdM[1];
+                if (krwM && !regularPriceKrw) regularPriceKrw = krwM[1] + '원';
+            }
+            if (!discountRate && /할인율|할인|discount/i.test(plText)) {
+                var drM = pVal.match(/(\d+)\s*%/);
+                if (drM) discountRate = drM[1] + '%';
+            }
+            if (/판매가|세일가|할인가|sale/i.test(plText)) {
+                var usdM2 = pVal.match(/\$([\d,\.]+)/);
+                var krwM2 = pVal.match(/([\d,]+)\s*원/);
+                if (usdM2 && !salePriceUsd) salePriceUsd = '$' + usdM2[1];
+                if (krwM2 && !salePriceKrw) salePriceKrw = krwM2[1] + '원';
+            }
+        }
+    }
+
+    /* 6-c: 가격 래퍼 fallback */
+    if (!regularPriceUsd && !regularPriceKrw) {
+        var priceWrap = document.querySelector('.cmpsPrice_pkg, .price_wrap, .priceInfo, .price_area');
+        if (priceWrap) {
+            var pwText = priceWrap.innerText || '';
+            var prUsd = pwText.match(/정상가[^$]*\$([\d,\.]+)/);
+            var prKrw = pwText.match(/정상가[^원]*([\d,]+)\s*원/);
+            if (prUsd) regularPriceUsd = '$' + prUsd[1];
+            if (prKrw) regularPriceKrw = prKrw[1] + '원';
+            if (!discountRate) {
+                var drWrap = pwText.match(/(\d+)\s*%/);
+                if (drWrap) discountRate = drWrap[1] + '%';
+            }
+            var psUsd = pwText.match(/(?:판매가|세일가)[^$]*\$([\d,\.]+)/);
+            var psKrw = pwText.match(/(?:판매가|세일가)[^원]*([\d,]+)\s*원/);
+            if (psUsd && !salePriceUsd) salePriceUsd = '$' + psUsd[1];
+            if (psKrw && !salePriceKrw) salePriceKrw = psKrw[1] + '원';
+        }
+    }
+
+    /* 6-d: del/s 태그 기반 fallback (원가=del, 판매가=인접 요소) */
+    if (!regularPriceUsd && !regularPriceKrw) {
+        var delEl = document.querySelector('del, s, .original-price, [class*="origin"]');
+        if (delEl) {
+            var delText = delEl.innerText.trim();
+            var duM = delText.match(/\$([\d,\.]+)/);
+            var dkM = delText.match(/([\d,]+)\s*원/);
+            if (duM) regularPriceUsd = '$' + duM[1];
+            if (dkM) regularPriceKrw = dkM[1] + '원';
+        }
+    }
+
+    /* ── 6-e: 최대혜택가 영역 (max_benefit_info) ── */
+    var maxBenefitInfo = '';
+    var mbEl = document.querySelector('dl[data-ganame="maxBenefit"]');
+    if (!mbEl) mbEl = document.querySelector('[class*="maxBenefit"], [class*="benefit_price"]');
+    if (mbEl) {
+        var lines = [];
+        var mbDls = mbEl.querySelectorAll('dl');
+        for (var mbi = 0; mbi < mbDls.length; mbi++) {
+            var mbDt = mbDls[mbi].querySelector('dt');
+            var mbDd = mbDls[mbi].querySelector('dd');
+            if (mbDt && mbDd) {
+                var label = mbDt.innerText.trim().replace(/\s+/g, ' ');
+                var value = mbDd.innerText.trim().replace(/\s+/g, ' ');
+                if (label && value && label.length < 40) {
+                    lines.push(label + ': ' + value);
+                }
+            }
+        }
+        if (lines.length > 0) {
+            maxBenefitInfo = lines.join('\n');
+        }
+        /* 쿠폰 정보 추가 */
+        var couponTag = mbEl.querySelector('.coupon_info_tag, [class*="coupon_info"]');
+        if (couponTag) {
+            var coupons = [];
+            var couponSpans = couponTag.querySelectorAll('span');
+            for (var ci = 0; ci < couponSpans.length; ci++) {
+                var ct = couponSpans[ci].innerText.trim();
+                if (ct && !/주문|적용|가능/i.test(ct)) coupons.push(ct);
+            }
+            if (coupons.length > 0) {
+                maxBenefitInfo += '\n적용가능쿠폰: ' + coupons.join(', ');
+            }
+        }
+    }
+
+    /* ── 7. 구매혜택 (benefits) ── */
+    var benefits = '';
+    var bnfSels = [
+        '[class*="benefit"]', '[class*="Benefit"]', '[class*="bnft"]',
+        '.coupon_area', '.point_area', '.prd_benefit',
+        '.cmpsOption_pkg', '[class*="addInfo"]'
+    ];
+    for (var bni = 0; bni < bnfSels.length; bni++) {
+        var bnfEl = document.querySelector(bnfSels[bni]);
+        if (bnfEl && bnfEl.innerText && bnfEl.innerText.trim().length > 5) {
+            benefits = bnfEl.innerText.trim().substring(0, 500);
+            break;
+        }
+    }
+
+    /* ── 8. 관련상품 (related_products) ── */
+    var relatedProducts = [];
+    var relSels = [
+        '[class*="together"]', '[class*="Together"]',
+        '[class*="related"]', '[class*="recommend"]',
+        '.cmpsPrdListH_pkg', '[class*="Also"]'
+    ];
+    var REL_NOISE = /최근검색|최근본|검색어|로그인|장바구니|고객센터/;
+    for (var rli = 0; rli < relSels.length; rli++) {
+        var relEl = document.querySelector(relSels[rli]);
+        if (!relEl) continue;
+        if (REL_NOISE.test(relEl.innerText.substring(0, 100))) continue;
+        var relLinks = relEl.querySelectorAll('a[href*="product"], a[href*="prdNo"]');
+        if (relLinks.length === 0) {
+            relLinks = relEl.querySelectorAll('[class*="item"], li, .prd');
+        }
+        for (var rj = 0; rj < Math.min(relLinks.length, 20); rj++) {
+            var rName = relLinks[rj].innerText.trim().substring(0, 80);
+            var rImg = relLinks[rj].querySelector('img');
+            var rLink = relLinks[rj].closest('a') || relLinks[rj].querySelector('a');
+            var rUrl = rLink ? (rLink.href || '') : '';
+            if (rName && rName.length > 2 && !REL_NOISE.test(rName) &&
+                (rUrl.includes('product') || rImg)) {
+                relatedProducts.push({
+                    name: rName,
+                    image: rImg ? (rImg.src || '') : '',
+                    url: rUrl
+                });
+            }
+        }
+        if (relatedProducts.length > 0) break;
+    }
+
+    return {
+        description: desc, detail_images: imgs, spec: spec,
+        category_breadcrumb: breadcrumb,
+        product_code: productCode, reference_code: referenceCode,
+        regular_price_usd: regularPriceUsd, regular_price_krw: regularPriceKrw,
+        discount_rate: discountRate,
+        sale_price_usd: salePriceUsd, sale_price_krw: salePriceKrw,
+        max_benefit_info: maxBenefitInfo,
+        benefits: benefits,
+        related_products: relatedProducts
+    };
 })()"""
 
 
