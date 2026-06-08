@@ -147,7 +147,7 @@ class ProductAgent(BaseAgent):
             # 1) 브라우저 + 네트워크 캡처 + 페이지 접속
             cookie_domain = self._get_cookie_domain(url)
             interceptor = NetworkInterceptor()
-            self.page = self.browser_mgr.create(cookie_domain=cookie_domain)
+            self.page = self._create_page(cookie_domain=cookie_domain)
             interceptor.start(self.page)
 
             resp = self._safe_goto(url)

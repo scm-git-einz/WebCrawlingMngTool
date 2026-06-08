@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from web.backend.routes import sites, results, ocr
+from web.backend.routes import sites, results, ocr, proxy
 
 app = FastAPI(title="크롤링 관리 대시보드", version="1.0.0")
 
@@ -22,6 +22,7 @@ app.add_middleware(
 app.include_router(sites.router, prefix="/api")
 app.include_router(results.router, prefix="/api")
 app.include_router(ocr.router, prefix="/api")
+app.include_router(proxy.router, prefix="/api")
 
 
 @app.get("/api/health")

@@ -373,9 +373,7 @@ class PromotionAgent(BaseAgent):
         """
         # 1. 브라우저 시작
         cookie_domain = self._get_cookie_domain(site["site_url"])
-        self.page = self.browser_mgr.create(
-            cookie_domain=cookie_domain,
-        )
+        self.page = self._create_page(cookie_domain=cookie_domain)
 
         # 2. 이벤트 목록 페이지 접속
         resp = self._safe_goto(

@@ -9,6 +9,7 @@ const STATUS_CLASS = {
 const AGENT_LABELS = {
   product: '상품 수집', news: '뉴스 검색', cafe: '카페 수집',
   promotion: '이벤트 수집', banner: '배너 수집', directory: '목록 수집',
+  order: '주문서 수집',
 }
 
 const AGENT_BADGE_CLASS = {
@@ -274,6 +275,7 @@ function ExpandedDetail({ detail }) {
       {agentType === 'promotion' && <PromotionDetail  detail={detail} />}
       {agentType === 'banner'    && <BannerDetail     detail={detail} />}
       {agentType === 'directory' && <DirectoryDetail  detail={detail} />}
+      {agentType === 'order'     && <OrderDetail      detail={detail} />}
     </div>
   )
 }
@@ -880,6 +882,12 @@ function DirectoryDetail({ detail }) {
 
   const withDetail = items.filter(it => it.description)
   const initials = [...new Set(items.map(it => it.brand_initial).filter(Boolean))]
+  const hasBranch = items.some(it => it.branch)
+  const hasLocation = items.some(it => it.location)
+  const hasPhone = items.some(it => it.phone)
+  const hasPeriod = items.some(it => it.period)
+  const hasStatus = items.some(it => it.status)
+  const branches = [...new Set(items.map(it => it.branch).filter(Boolean))]
 
   return (
     <>
@@ -895,6 +903,7 @@ function DirectoryDetail({ detail }) {
         <span>총 항목: <strong>{items.length}</strong></span>
         {withDetail.length > 0 && <span>상세 수집: <strong>{withDetail.length}</strong></span>}
         {initials.length > 0 && <span>인덱스: <strong>{initials.length}</strong>개</span>}
+        {branches.length > 0 && <span>지점: <strong>{branches.length}</strong>개</span>}
       </div>
 
       {items.length > 0 && (
@@ -903,11 +912,14 @@ function DirectoryDetail({ detail }) {
             <tr>
               <th style={{width:40}}>#</th>
               {initials.length > 0 && <th style={{width:40}}>색인</th>}
+              {hasBranch && <th style={{width:100}}>지점</th>}
               <th>이름</th>
-              <th style={{width:100}}>카테고리</th>
-              {items.some(it => it.period) && <th style={{width:160}}>기간</th>}
-              {items.some(it => it.status) && <th style={{width:70}}>상태</th>}
-              <th style={{width:50}}>상세</th>
+              <th style={{width:80}}>카테고리</th>
+              {hasLocation && <th style={{width:120}}>위치</th>}
+              {hasPhone && <th style={{width:130}}>전화번호</th>}
+              {hasPeriod && <th style={{width:160}}>기간</th>}
+              {hasStatus && <th style={{width:70}}>상태</th>}
+              {!hasBranch && <th style={{width:50}}>상세</th>}
             </tr>
           </thead>
           <tbody>
@@ -916,6 +928,9 @@ function DirectoryDetail({ detail }) {
                 <td style={{color:'var(--text-secondary)'}}>{i + 1}</td>
                 {initials.length > 0 && (
                   <td style={{textAlign:'center',fontWeight:600,color:'var(--primary)'}}>{it.brand_initial || '-'}</td>
+                )}
+                {hasBranch && (
+                  <td style={{fontSize:12,color:'var(--text-secondary)',whiteSpace:'nowrap'}}>{it.branch || '-'}</td>
                 )}
                 <td style={{fontWeight:500,maxWidth:250,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
                   {it.detail_url ? (
@@ -926,10 +941,16 @@ function DirectoryDetail({ detail }) {
                   ) : (it.name || '(이름 없음)')}
                 </td>
                 <td style={{fontSize:12,color:'var(--text-secondary)'}}>{it.category || '-'}</td>
-                {items.some(x => x.period) && (
+                {hasLocation && (
+                  <td style={{fontSize:12,whiteSpace:'nowrap'}}>{it.location || '-'}</td>
+                )}
+                {hasPhone && (
+                  <td style={{fontSize:12,whiteSpace:'nowrap'}}>{it.phone || '-'}</td>
+                )}
+                {hasPeriod && (
                   <td style={{fontSize:12,whiteSpace:'nowrap'}}>{it.period || '-'}</td>
                 )}
-                {items.some(x => x.status) && (
+                {hasStatus && (
                   <td>
                     {it.status ? (
                       <span className={`badge ${/진행|ongoing|active/i.test(it.status) ? 'success' : /종료|ended|closed/i.test(it.status) ? 'failed' : 'pending'}`}>
@@ -938,9 +959,11 @@ function DirectoryDetail({ detail }) {
                     ) : '-'}
                   </td>
                 )}
-                <td style={{textAlign:'center'}}>
-                  {it.description ? '>' : '-'}
-                </td>
+                {!hasBranch && (
+                  <td style={{textAlign:'center'}}>
+                    {it.description ? '>' : '-'}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -949,6 +972,120 @@ function DirectoryDetail({ detail }) {
 
       {items.length === 0 && (
         <div className="empty-state">수집된 항목이 없습니다</div>
+      )}
+    </>
+  )
+}
+
+
+/* ── order: 주문서 결제정보 결과 ─────────────────── */
+const PAYMENT_LABELS = {
+  discount_rate: '할인율',
+  payment_usd: '결제금액($)',
+  payment_krw: '결제금액(원)',
+  regular_price: '정상가',
+  regular_price_usd: '정상가($)',
+  regular_price_krw: '정상가(원)',
+  member_discount: '회원할인',
+  member_discount_usd: '회원할인($)',
+  member_discount_krw: '회원할인(원)',
+  benefits: '혜택',
+  benefits_usd: '혜택($)',
+  benefits_krw: '혜택(원)',
+  instant_discount: '즉시할인',
+  coupon_discount: '쿠폰할인',
+  payment_amount: '결제금액',
+  final_payment: '최종결제금액',
+  duty_free_limit: '면세한도적용금액',
+  tax_point: '과세 포인트',
+  reward_points: '적립 포인트',
+  shipping_fee: '배송비',
+}
+
+function OrderDetail({ detail }) {
+  const results = detail.products || []
+  const storeInfo = detail.store_info || {}
+  const successCount = storeInfo.success_count || results.filter(r => r.payment_summary && Object.keys(r.payment_summary).length > 0).length
+
+  return (
+    <>
+      <div style={{display:'flex',gap:24,marginBottom:16,fontSize:13,color:'var(--text-secondary)',flexWrap:'wrap'}}>
+        <span>장바구니 상품: <strong>{results.length}</strong>건</span>
+        <span>결제정보 수집: <strong>{successCount}</strong>건</span>
+      </div>
+
+      {results.length > 0 && (
+        <div className="product-table-scroll">
+          <table className="price-table">
+            <thead>
+              <tr>
+                <th style={{width:30}}>#</th>
+                <th>상품명</th>
+                <th style={{width:60,textAlign:'center'}}>수량</th>
+                <th style={{width:70,textAlign:'center'}}>할인율</th>
+                <th style={{width:100,textAlign:'right'}}>결제금액($)</th>
+                <th style={{width:110,textAlign:'right'}}>결제금액(원)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {results.map((r, i) => {
+                const item = r.cart_item || r.order_item || {}
+                const pay = r.payment_summary || {}
+                return (
+                  <tr key={i}>
+                    <td style={{color:'var(--text-secondary)'}}>{i + 1}</td>
+                    <td style={{fontWeight:500,maxWidth:250,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                      {item.name || '-'}
+                    </td>
+                    <td style={{textAlign:'center'}}>{item.qty || '1'}</td>
+                    <td style={{textAlign:'center',color:'var(--danger)',fontWeight:600}}>
+                      {pay.discount_rate || '-'}
+                    </td>
+                    <td style={{textAlign:'right',fontWeight:600}}>
+                      {pay.payment_usd || pay.payment_amount || '-'}
+                    </td>
+                    <td style={{textAlign:'right',fontWeight:600}}>
+                      {pay.payment_krw || '-'}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {results.length > 0 && results.some(r => r.payment_summary && Object.keys(r.payment_summary).length > 3) && (
+        <>
+          <h4 style={{margin:'20px 0 8px',fontSize:14}}>상세 결제정보</h4>
+          {results.map((r, i) => {
+            const item = r.cart_item || r.order_item || {}
+            const pay = r.payment_summary || {}
+            const keys = Object.keys(pay)
+            if (keys.length === 0) return null
+            return (
+              <div key={i} className="order-payment-card" style={{marginBottom:8}}>
+                <div style={{fontSize:12,fontWeight:600,marginBottom:8,color:'var(--text-secondary)'}}>
+                  [{i+1}] {item.name || '상품'}
+                </div>
+                <table className="price-table" style={{fontSize:12}}>
+                  <tbody>
+                    {keys.map(key => (
+                      <tr key={key} className={key.startsWith('payment') ? 'order-total-row' : ''}>
+                        <td style={{width:130}}>{PAYMENT_LABELS[key] || key}</td>
+                        <td style={{textAlign:'right'}}>{pay[key]}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          })}
+        </>
+      )}
+
+      {results.length === 0 && (
+        <div className="empty-state">수집된 결제정보가 없습니다</div>
       )}
     </>
   )

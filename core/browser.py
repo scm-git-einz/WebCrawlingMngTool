@@ -65,11 +65,14 @@ class BrowserManager:
         self._context: BrowserContext | None = None
         self._config: dict = {}
         self._cookie_domain: str | None = None
+        self._current_proxy: dict | None = None
 
     def create(
         self,
         config: dict | None = None,
         cookie_domain: str | None = None,
+        headless: bool = True,
+        proxy: dict | None = None,
     ) -> Page:
         """
         Stealth 브라우저를 시작하고 새 Page 를 반환한다.
@@ -81,6 +84,10 @@ class BrowserManager:
             config:        브라우저 설정 딕셔너리
             cookie_domain: 쿠키 영속화 도메인 (예: "brand.naver.com")
                            지정 시 이전 세션의 쿠키를 자동 로드한다.
+            headless:      True=화면 없음 (기본), False=화면 표시
+                           봇 차단이 강한 사이트는 False 필요
+            proxy:         프록시 설정 딕셔너리 (예: {"server": "http://ip:port"})
+                           지정 시 해당 프록시를 통해 접속한다.
         """
         merged = {**DEFAULT_BROWSER_CONFIG, **(config or {})}
         # headers 는 deep merge (플랫폼별 헤더가 기본 헤더를 덮어쓰지 않도록)
@@ -91,17 +98,20 @@ class BrowserManager:
             }
         self._config = merged
         self._cookie_domain = cookie_domain
+        self._current_proxy = proxy
 
         if self._context is not None:
             page = self._context.new_page()
             _stealth.apply_stealth_sync(page)
             return page
 
-        print("[browser] Stealth Chromium 브라우저 시작...")
+        mode = "Headless" if headless else "Headed"
+        proxy_info = f" via {proxy['server']}" if proxy else ""
+        print(f"[browser] Stealth Chromium 브라우저 시작 ({mode}{proxy_info})...")
 
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(
-            headless=True,
+            headless=headless,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
@@ -109,13 +119,17 @@ class BrowserManager:
             ],
         )
 
-        self._context = self._browser.new_context(
+        context_kwargs = dict(
             user_agent=merged["user_agent"],
             viewport=merged["viewport"],
             extra_http_headers=merged.get("headers", {}),
             locale="ko-KR",
             timezone_id="Asia/Seoul",
         )
+        if proxy:
+            context_kwargs["proxy"] = proxy
+
+        self._context = self._browser.new_context(**context_kwargs)
         self._context.set_default_timeout(merged.get("timeout", 30000))
 
         # 도메인 필터링
@@ -143,6 +157,58 @@ class BrowserManager:
         _stealth.apply_stealth_sync(page)
 
         print("[browser] 브라우저 준비 완료")
+        return page
+
+    def recreate_context(self, proxy: dict | None = None) -> Page:
+        """프록시를 교체하여 새 컨텍스트를 생성한다. 기존 컨텍스트는 종료."""
+        if self._cookie_domain:
+            self.save_cookies(self._cookie_domain)
+
+        if self._context:
+            try:
+                self._context.close()
+            except Exception:
+                pass
+            self._context = None
+
+        self._current_proxy = proxy
+        proxy_info = f" via {proxy['server']}" if proxy else " (직접 연결)"
+        print(f"[browser] 프록시 교체{proxy_info}")
+
+        context_kwargs = dict(
+            user_agent=self._config["user_agent"],
+            viewport=self._config["viewport"],
+            extra_http_headers=self._config.get("headers", {}),
+            locale="ko-KR",
+            timezone_id="Asia/Seoul",
+        )
+        if proxy:
+            context_kwargs["proxy"] = proxy
+
+        self._context = self._browser.new_context(**context_kwargs)
+        self._context.set_default_timeout(self._config.get("timeout", 30000))
+
+        merged = self._config
+        allowed = merged.get("allowed_domains", [])
+        blocked_types = merged.get("blocked_resource_types", [])
+        if allowed or blocked_types:
+            def _route_handler(route):
+                req = route.request
+                if req.resource_type in blocked_types:
+                    route.abort()
+                    return
+                if allowed and not _is_allowed(req.url, allowed):
+                    route.abort()
+                    return
+                route.continue_()
+            self._context.route("**/*", _route_handler)
+
+        if self._cookie_domain:
+            self._load_cookies(self._cookie_domain)
+
+        page = self._context.new_page()
+        _stealth.apply_stealth_sync(page)
+        print("[browser] 새 컨텍스트 준비 완료")
         return page
 
     def save_cookies(self, domain: str | None = None):

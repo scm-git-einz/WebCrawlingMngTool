@@ -81,7 +81,7 @@ class BannerAgent(BaseAgent):
 
         try:
             cookie_domain = self._get_cookie_domain(url)
-            self.page = self.browser_mgr.create(cookie_domain=cookie_domain)
+            self.page = self._create_page(cookie_domain=cookie_domain)
 
             resp = self._safe_goto(url)
             if self._is_blocked(resp):

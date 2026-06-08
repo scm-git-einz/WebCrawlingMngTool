@@ -25,6 +25,7 @@ const CATEGORY_LABELS = {
   '브랜드목록':       { icon: '\u{1F4CB}', color: '#0ea5e9' },
   '뉴스':             { icon: '\u{1F4F0}', color: '#64748b' },
   '카페':             { icon: '\u{2615}', color: '#a855f7' },
+  '주문서':           { icon: '\u{1F4B3}', color: '#059669' },
 }
 
 
@@ -121,6 +122,7 @@ export default function SiteSettings() {
       agent_type: site.agent_type,
       config: site.crawl_config || {},
       keywords: site.keywords || [],
+      credentials: site.credentials || [],
     })
   }
 
@@ -602,7 +604,7 @@ function LogViewerModal({ siteId, siteName, onClose }) {
    에이전트 유형별 설정 모달
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 const AGENT_BADGE_CLASS = {
-  product: 'dp', news: 'pending', cafe: 'tess', promotion: 'promo', banner: 'banner-badge', directory: 'dir-badge',
+  product: 'dp', news: 'pending', cafe: 'tess', promotion: 'promo', banner: 'banner-badge', directory: 'dir-badge', order: 'order-badge',
 }
 
 
@@ -792,9 +794,236 @@ function UrlAnalyzePanel({ url, existingFieldKeys, textColor, onExistingFieldsFo
 }
 
 
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   로그인 계정 관리 (모든 에이전트 공통)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+function CredentialManager({ siteId, credentials: initialCreds, showConfirm, closeConfirm }) {
+  const [creds, setCreds] = useState(initialCreds || [])
+  const [showForm, setShowForm] = useState(false)
+  const [editId, setEditId] = useState(null)
+  const [form, setForm] = useState({ login_id: '', login_pwd: '', label: '' })
+  const [showPwd, setShowPwd] = useState({})
+
+  const reload = async () => {
+    try {
+      const res = await fetch(`/api/sites/${siteId}/credentials`)
+      if (res.ok) setCreds(await res.json())
+    } catch {}
+  }
+
+  const resetForm = () => {
+    setForm({ login_id: '', login_pwd: '', label: '' })
+    setEditId(null)
+    setShowForm(false)
+  }
+
+  const handleSave = async () => {
+    if (!form.login_id.trim() || !form.login_pwd.trim()) {
+      alert('ID와 비밀번호를 입력해주세요.')
+      return
+    }
+    const isEdit = editId !== null
+    const url = isEdit
+      ? `/api/sites/credentials/${editId}`
+      : `/api/sites/${siteId}/credentials`
+    const method = isEdit ? 'PUT' : 'POST'
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      })
+      if (!res.ok) throw new Error()
+      resetForm()
+      reload()
+    } catch {
+      alert('계정 저장에 실패했습니다.')
+    }
+  }
+
+  const startEdit = (c) => {
+    setForm({ login_id: c.login_id, login_pwd: c.login_pwd, label: c.label || '' })
+    setEditId(c.id)
+    setShowForm(true)
+  }
+
+  const handleDelete = (c) => {
+    showConfirm({
+      title: '계정 삭제',
+      message: `"${c.login_id}" 계정을 삭제하시겠습니까?`,
+      confirmLabel: '삭제',
+      confirmType: 'danger',
+      onConfirm: async () => {
+        closeConfirm()
+        try {
+          await fetch(`/api/sites/credentials/${c.id}`, { method: 'DELETE' })
+          reload()
+        } catch {}
+      },
+    })
+  }
+
+  const handleToggle = async (c) => {
+    try {
+      await fetch(`/api/sites/credentials/${c.id}/toggle`, { method: 'PUT' })
+      reload()
+    } catch {}
+  }
+
+  const togglePwd = (id) => setShowPwd(prev => ({ ...prev, [id]: !prev[id] }))
+
+  return (
+    <div className="credential-section">
+      <div className="credential-header">
+        <h4 className="config-section-title" style={{margin:0}}>
+          로그인 계정
+          <span style={{fontSize:12,color:'var(--text-secondary)',fontWeight:400,marginLeft:6}}>
+            ({creds.length}개)
+          </span>
+        </h4>
+        {!showForm && (
+          <button className="btn btn-outline btn-xs" onClick={() => { resetForm(); setShowForm(true) }}>
+            + 추가
+          </button>
+        )}
+      </div>
+      <p className="config-section-desc">
+        로그인이 필요한 사이트의 계정을 등록합니다. 여러 계정을 등록하면 크롤링 시 순환 사용됩니다.
+      </p>
+
+      {creds.length > 0 && (
+        <table className="credential-table">
+          <thead>
+            <tr>
+              <th>라벨</th><th>ID</th><th>비밀번호</th><th>상태</th><th>최근 사용</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {creds.map(c => (
+              <tr key={c.id} className={c.is_active ? '' : 'inactive-row'}>
+                <td>{c.label || '-'}</td>
+                <td><code>{c.login_id}</code></td>
+                <td>
+                  <span className="pwd-cell">
+                    <code>{showPwd[c.id] ? c.login_pwd : '••••••'}</code>
+                    <button className="btn-icon" onClick={() => togglePwd(c.id)} title={showPwd[c.id] ? '숨기기' : '보기'}>
+                      {showPwd[c.id] ? '🙈' : '👁'}
+                    </button>
+                  </span>
+                </td>
+                <td>
+                  <span
+                    className={`badge ${c.is_active ? 'active' : 'inactive'}`}
+                    style={{cursor:'pointer'}}
+                    onClick={() => handleToggle(c)}
+                    title="클릭하여 상태 변경"
+                  >
+                    {c.is_active ? '활성' : '비활성'}
+                  </span>
+                </td>
+                <td style={{fontSize:12,color:'var(--text-secondary)'}}>
+                  {c.last_used_at || '-'}
+                </td>
+                <td>
+                  <span className="credential-actions">
+                    <button className="btn-icon" onClick={() => startEdit(c)} title="수정">✏️</button>
+                    <button className="btn-icon" onClick={() => handleDelete(c)} title="삭제">🗑️</button>
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {showForm && (
+        <div className="credential-form">
+          <div className="credential-form-title">
+            {editId ? '계정 수정' : '새 계정 추가'}
+          </div>
+          <div className="credential-form-grid">
+            <label>
+              <span>라벨 (선택)</span>
+              <input
+                className="form-control"
+                placeholder="예: 본계정, 테스트용"
+                value={form.label}
+                onChange={e => setForm(f => ({...f, label: e.target.value}))}
+              />
+            </label>
+            <label>
+              <span>로그인 ID <em>*</em></span>
+              <input
+                className="form-control"
+                placeholder="아이디 입력"
+                value={form.login_id}
+                onChange={e => setForm(f => ({...f, login_id: e.target.value}))}
+              />
+            </label>
+            <label>
+              <span>비밀번호 <em>*</em></span>
+              <input
+                className="form-control"
+                type="password"
+                placeholder="비밀번호 입력"
+                value={form.login_pwd}
+                onChange={e => setForm(f => ({...f, login_pwd: e.target.value}))}
+              />
+            </label>
+          </div>
+          <div className="credential-form-actions">
+            <button className="btn btn-outline btn-xs" onClick={resetForm}>취소</button>
+            <button className="btn btn-primary btn-xs" onClick={handleSave}>
+              {editId ? '수정' : '추가'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+
 function ConfigModal({ site, onClose, onSaved, showConfirm, closeConfirm }) {
   const agentType = site.agent_type
-  const modalWidth = agentType === 'news' ? 560 : agentType === 'product' ? 580 : 520
+  const modalWidth = agentType === 'news' ? 560 : agentType === 'product' ? 580 : agentType === 'order' ? 560 : 520
+
+  const [editInfo, setEditInfo] = useState({ name: site.name, url: site.url })
+  const [infoEditing, setInfoEditing] = useState(false)
+  const [infoSaving, setInfoSaving] = useState(false)
+
+  const infoChanged = editInfo.name !== site.name || editInfo.url !== site.url
+
+  const handleSaveInfo = () => {
+    if (!editInfo.name.trim() || !editInfo.url.trim()) return
+    showConfirm({
+      title: '사이트 정보 수정',
+      message: `사이트명/URL을 변경하시겠습니까?`,
+      detail: (editInfo.name !== site.name ? `이름: ${site.name} → ${editInfo.name}\n` : '')
+            + (editInfo.url !== site.url ? `URL: ${site.url} → ${editInfo.url}` : ''),
+      confirmLabel: '변경',
+      onConfirm: async () => {
+        closeConfirm()
+        setInfoSaving(true)
+        try {
+          const body = {}
+          if (editInfo.name !== site.name) body.site_name = editInfo.name.trim()
+          if (editInfo.url !== site.url) body.site_url = editInfo.url.trim()
+          await fetch(`/api/sites/${site.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          })
+          setInfoEditing(false)
+          onSaved()
+        } catch (e) {
+          alert('수정 실패: ' + (e.message || '네트워크 오류'))
+        } finally {
+          setInfoSaving(false)
+        }
+      },
+    })
+  }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -809,12 +1038,70 @@ function ConfigModal({ site, onClose, onSaved, showConfirm, closeConfirm }) {
           <button className="modal-close" onClick={onClose}>x</button>
         </div>
         <div className="modal-body">
+          {/* ── 사이트 정보 편집 ── */}
+          <div className="site-info-edit-section">
+            {!infoEditing ? (
+              <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12,fontSize:13,color:'var(--text-secondary)'}}>
+                <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:380}}>{site.url}</span>
+                <button
+                  className="btn btn-outline btn-sm"
+                  style={{fontSize:11,padding:'2px 8px',flexShrink:0}}
+                  onClick={() => setInfoEditing(true)}
+                >
+                  편집
+                </button>
+              </div>
+            ) : (
+              <div style={{marginBottom:16,padding:'12px 14px',background:'var(--bg-secondary)',borderRadius:8,border:'1px solid var(--border)'}}>
+                <div style={{marginBottom:8}}>
+                  <label style={{fontSize:12,color:'var(--text-secondary)',display:'block',marginBottom:3}}>사이트명</label>
+                  <input
+                    type="text"
+                    className="form-control"
+                    value={editInfo.name}
+                    onChange={e => setEditInfo({ ...editInfo, name: e.target.value })}
+                    style={{width:'100%',padding:'6px 10px',fontSize:13}}
+                  />
+                </div>
+                <div style={{marginBottom:10}}>
+                  <label style={{fontSize:12,color:'var(--text-secondary)',display:'block',marginBottom:3}}>URL</label>
+                  <input
+                    type="text"
+                    className="form-control"
+                    value={editInfo.url}
+                    onChange={e => setEditInfo({ ...editInfo, url: e.target.value })}
+                    style={{width:'100%',padding:'6px 10px',fontSize:13}}
+                  />
+                </div>
+                <div style={{display:'flex',gap:6,justifyContent:'flex-end'}}>
+                  <button
+                    className="btn btn-outline btn-sm"
+                    style={{fontSize:11}}
+                    onClick={() => { setEditInfo({ name: site.name, url: site.url }); setInfoEditing(false) }}
+                  >
+                    취소
+                  </button>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    style={{fontSize:11}}
+                    disabled={!infoChanged || infoSaving || !editInfo.name.trim() || !editInfo.url.trim()}
+                    onClick={handleSaveInfo}
+                  >
+                    {infoSaving ? '저장 중...' : '정보 저장'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
           {agentType === 'product'   && <ProductConfig   site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
           {agentType === 'news'      && <NewsConfig      site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
           {agentType === 'cafe'      && <CafeConfig      site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
           {agentType === 'promotion' && <PromotionConfig site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
           {agentType === 'banner'    && <BannerConfig    site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
           {agentType === 'directory' && <DirectoryConfig site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
+          {agentType === 'order'     && <OrderConfig     site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
+          <CredentialManager siteId={site.id} credentials={site.credentials} showConfirm={showConfirm} closeConfirm={closeConfirm} />
         </div>
       </div>
     </div>
@@ -1736,12 +2023,16 @@ function BannerConfig({ site, onSaved, showConfirm, closeConfirm }) {
 /* ── directory: 브랜드/이벤트 목록 수집 설정 ─────── */
 const DIR_LIST_TYPE_OPTIONS = [
   { value: 'brand_directory', label: '브랜드 디렉토리', icon: '🏷️', desc: '브랜드 목록 (A~Z / ㄱ~ㅎ 인덱스)' },
+  { value: 'brand_branch',    label: '브랜드 지점',     icon: '🏬', desc: '면세점 브랜드 매장 (지점/층/전화번호)' },
   { value: 'event_list',      label: '이벤트 목록',     icon: '📅', desc: '이벤트/프로모션 리스트' },
 ]
 
 const DIR_FIELD_OPTIONS = [
   { key: 'name',         label: '이름 (브랜드명/이벤트명)' },
   { key: 'category',     label: '카테고리' },
+  { key: 'branch',       label: '지점명' },
+  { key: 'location',     label: '위치 (층)' },
+  { key: 'phone',        label: '전화번호' },
   { key: 'description',  label: '설명' },
   { key: 'period',       label: '기간' },
   { key: 'status',       label: '상태 (진행중/종료)' },
@@ -1846,7 +2137,14 @@ function DirectoryConfig({ site, onSaved, showConfirm, closeConfirm }) {
             <label
               key={opt.value}
               className={`list-type-option ${config.list_type === opt.value ? 'selected' : ''}`}
-              onClick={() => setConfig({ ...config, list_type: opt.value })}
+              onClick={() => {
+                const update = { ...config, list_type: opt.value }
+                if (opt.value === 'brand_branch') {
+                  update.collect_fields = ['name', 'category', 'branch', 'location', 'phone']
+                  update.index_navigation = false
+                }
+                setConfig(update)
+              }}
             >
               <input
                 type="radio" name="dir_list_type"
@@ -1996,8 +2294,8 @@ const CATEGORY_DEFAULT_CONFIGS = {
   },
   /* directory */
   '브랜드목록': {
-    collect_fields: ['name','category','description'],
-    list_type: 'brand_directory', collect_details: false, index_navigation: true, max_items: 0,
+    collect_fields: ['name','category','branch','location','phone'],
+    list_type: 'brand_branch', collect_details: false, index_navigation: false, load_all_pages: true, max_items: 0,
   },
 }
 
@@ -2096,6 +2394,146 @@ function buildCheckedState(agentType, catConfig) {
   return { fields, options, listType, pagination }
 }
 
+/* ── order: 주문서 결제정보 수집 설정 ─────────── */
+function OrderConfig({ site, onSaved, showConfirm, closeConfirm }) {
+  const [config, setConfig] = useState(() => {
+    const c = site.config || {}
+    return {
+      login_url: c.login_url || '',
+      cart_url: c.cart_url || '',
+      collect_items: c.collect_items !== false,
+      collect_payment: c.collect_payment !== false,
+      login_config: {
+        id_selector: '', pwd_selector: '', submit_selector: '', success_indicator: '',
+        ...(c.login_config || {}),
+      },
+    }
+  })
+
+  const handleSave = () => {
+    showConfirm({
+      title: '설정 저장',
+      message: `"${site.name}" 주문서 수집 설정을 저장하시겠습니까?`,
+      confirmLabel: '저장',
+      onConfirm: async () => {
+        closeConfirm()
+        try {
+          const res = await fetch(`/api/sites/${site.id}/config`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ crawl_config: config }),
+          })
+          if (!res.ok) throw new Error()
+          onSaved()
+        } catch {
+          alert('설정 저장에 실패했습니다.')
+        }
+      },
+    })
+  }
+
+  return (
+    <div>
+      <p className="config-section-desc">
+        장바구니 상품을 한 건씩 선택 → 주문서 이동 → 결제정보(정상가/할인/혜택/결제금액) 수집을 반복합니다.
+        로그인 계정은 하단에서 등록하세요.
+      </p>
+
+      <div className="product-config-section active" style={{marginTop:12}}>
+        <div className="config-section-title">페이지 URL</div>
+        <div style={{display:'flex',flexDirection:'column',gap:8,marginTop:8}}>
+          <label style={{fontSize:12}}>
+            <span style={{color:'var(--text-secondary)'}}>로그인 URL</span>
+            <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>(비워두면 사이트 URL 사용)</span>
+            <input
+              className="form-control"
+              placeholder="https://example.com/login"
+              value={config.login_url}
+              onChange={e => setConfig(c => ({...c, login_url: e.target.value}))}
+              style={{marginTop:4,fontSize:12}}
+            />
+          </label>
+          <label style={{fontSize:12}}>
+            <span style={{color:'var(--text-secondary)'}}>장바구니 URL</span>
+            <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>(비워두면 사이트 URL 사용)</span>
+            <input
+              className="form-control"
+              placeholder="https://example.com/cart"
+              value={config.cart_url}
+              onChange={e => setConfig(c => ({...c, cart_url: e.target.value}))}
+              style={{marginTop:4,fontSize:12}}
+            />
+          </label>
+        </div>
+      </div>
+
+      <div className="product-config-section active" style={{marginTop:12}}>
+        <div className="config-section-title">수집 항목</div>
+        <div style={{display:'flex',flexDirection:'column',gap:8,marginTop:8}}>
+          <label className="order-toggle-row">
+            <input type="checkbox" checked={config.collect_payment}
+              onChange={e => setConfig(c => ({...c, collect_payment: e.target.checked}))}
+            />
+            <div>
+              <strong>결제정보 수집</strong>
+              <span className="config-section-desc" style={{margin:0}}>정상가, 할인, 혜택, 결제금액, 면세한도, 적립 포인트</span>
+            </div>
+          </label>
+          <label className="order-toggle-row">
+            <input type="checkbox" checked={config.collect_items}
+              onChange={e => setConfig(c => ({...c, collect_items: e.target.checked}))}
+            />
+            <div>
+              <strong>장바구니 상품 수집</strong>
+              <span className="config-section-desc" style={{margin:0}}>상품명, 수량, 정상가, 판매가, 브랜드</span>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <div className="product-config-section active" style={{marginTop:12}}>
+        <div className="config-section-title">로그인 폼 셀렉터 (선택)</div>
+        <p className="config-section-desc">비워두면 자동 탐지합니다. 로그인 실패 시 수동 지정하세요.</p>
+        <div className="order-selector-grid">
+          <label>
+            <span>ID 입력 셀렉터</span>
+            <input className="form-control" placeholder="#userId"
+              value={config.login_config.id_selector || ''}
+              onChange={e => setConfig(c => ({...c, login_config: {...c.login_config, id_selector: e.target.value}}))}
+            />
+          </label>
+          <label>
+            <span>비밀번호 셀렉터</span>
+            <input className="form-control" placeholder="#password"
+              value={config.login_config.pwd_selector || ''}
+              onChange={e => setConfig(c => ({...c, login_config: {...c.login_config, pwd_selector: e.target.value}}))}
+            />
+          </label>
+          <label>
+            <span>로그인 버튼 셀렉터</span>
+            <input className="form-control" placeholder="#loginBtn"
+              value={config.login_config.submit_selector || ''}
+              onChange={e => setConfig(c => ({...c, login_config: {...c.login_config, submit_selector: e.target.value}}))}
+            />
+          </label>
+          <label>
+            <span>로그인 성공 지표</span>
+            <input className="form-control" placeholder=".my-page, .logout"
+              value={config.login_config.success_indicator || ''}
+              onChange={e => setConfig(c => ({...c, login_config: {...c.login_config, success_indicator: e.target.value}}))}
+            />
+          </label>
+        </div>
+      </div>
+
+      <div style={{textAlign:'right',marginTop:16}}>
+        <button className="btn btn-primary" onClick={handleSave}>저장</button>
+      </div>
+    </div>
+  )
+}
+
+
 /* ─── 체크 상태 → crawl_config 변환 ─── */
 function buildCrawlConfig(agentType, checked) {
   if (agentType === 'product') {
@@ -2147,12 +2585,14 @@ function AddSiteModal({ categories, onClose, onSaved, showConfirm, closeConfirm 
     if (c === '경쟁사이벤트') return 'promotion'
     if (c === '경쟁사배너') return 'banner'
     if (c === '브랜드목록') return 'directory'
+    if (c === '주문서') return 'order'
     return 'product'
   }
 
   const AGENT_TYPE_LABELS = {
     product: '상품 수집', news: '뉴스 기사', cafe: '카페 게시글',
     promotion: '이벤트 수집', banner: '배너 수집', directory: '목록 수집',
+    order: '주문서 수집',
   }
 
   const initCat = categories[0] || ''

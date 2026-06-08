@@ -694,6 +694,204 @@ select.form-control { cursor: pointer; }
   color: var(--primary);
 }
 
+/* ─── Order Config ─── */
+.badge.order-badge {
+  background: #059669;
+  color: #fff;
+}
+
+.order-toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.order-toggle-row:hover {
+  border-color: var(--primary);
+}
+
+.order-toggle-row input[type="checkbox"] {
+  margin-top: 3px;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.order-toggle-row strong {
+  font-size: 13px;
+  display: block;
+}
+
+.order-toggle-row .config-section-desc {
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.order-selector-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.order-selector-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.order-selector-grid label span {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.order-selector-grid .form-control {
+  font-size: 12px;
+  padding: 5px 8px;
+}
+
+/* ─── Order Payment Result ─── */
+.order-payment-card {
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.order-total-row td {
+  font-weight: 700 !important;
+  font-size: 14px;
+  color: var(--primary);
+  border-top: 2px solid var(--border);
+}
+
+/* ─── Credential Manager ─── */
+.credential-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.credential-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.credential-table {
+  width: 100%;
+  font-size: 12px;
+  border-collapse: collapse;
+  margin-top: 8px;
+}
+
+.credential-table th {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 2px solid var(--border);
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.credential-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.credential-table tr.inactive-row {
+  opacity: 0.5;
+}
+
+.credential-table code {
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.pwd-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.btn-icon {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 4px;
+  line-height: 1;
+  opacity: 0.6;
+}
+
+.btn-icon:hover {
+  opacity: 1;
+}
+
+.credential-actions {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.credential-form {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius);
+  background: #f8fafc;
+}
+
+.credential-form-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 10px;
+  color: var(--primary);
+}
+
+.credential-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
+
+.credential-form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.credential-form-grid label span {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.credential-form-grid label em {
+  color: var(--danger);
+  font-style: normal;
+}
+
+.credential-form-grid .form-control {
+  font-size: 12px;
+  padding: 5px 8px;
+}
+
+.credential-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 10px;
+}
+
 /* ─── Crawl Mode Selector (단일 매장 / 도메인 전체) ─── */
 .crawl-mode-selector {
   margin-bottom: 20px;

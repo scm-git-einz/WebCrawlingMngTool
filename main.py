@@ -186,6 +186,8 @@ def cmd_run(args):
             k.strip() for k in args.keywords.split(",") if k.strip()
         ]
 
+    use_proxy = getattr(args, "proxy", False)
+
     try:
         if args.id:
             # 특정 사이트 수집 → 해당 사이트의 agent_type 사용
@@ -195,6 +197,8 @@ def cmd_run(args):
                 return
             agent_type = site.get("agent_type", "product")
             agent = get_agent(agent_type, db=db)
+            if use_proxy:
+                agent.enable_proxy()
 
             if agent_type == "news":
                 # --keywords 가 없으면 대화형 프롬프트
@@ -215,6 +219,8 @@ def cmd_run(args):
         elif args.agent:
             # 특정 에이전트 타입의 모든 사이트 수집
             agent = get_agent(args.agent, db=db)
+            if use_proxy:
+                agent.enable_proxy()
             agent.run_all()
 
         else:
@@ -236,6 +242,8 @@ def cmd_run(args):
                 print(f"  에이전트: {at} ({len(by_type[at])}개 사이트)")
                 print(f"{'='*60}")
                 agent = get_agent(at, db=db)
+                if use_proxy:
+                    agent.enable_proxy()
                 agent.run_all()
 
     finally:
@@ -505,6 +513,10 @@ def main():
         "--keywords",
         help="일회성 키워드 지정 (쉼표 구분, 뉴스 전용). "
              "예: --keywords \"해외여행,환율,면세\"",
+    )
+    p_run.add_argument(
+        "--proxy", action="store_true",
+        help="무료 프록시 IP 로테이션 활성화",
     )
 
     # config

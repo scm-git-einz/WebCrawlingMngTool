@@ -25,7 +25,9 @@
 │             BaseAgent (추상 클래스)                               │
 │             ├── CrawlDB (SQLite)                                │
 │             ├── BrowserManager (Playwright Stealth)              │
+│             ├── ProxyManager (무료 프록시 IP 로테이션)              │
 │             ├── 적응형 백오프 (429/503 대응)                       │
+│             ├── 소프트 차단 감지 (HTTP 200 빈 페이지/이미지만)       │
 │             └── 인간형 행동 시뮬레이션                              │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -41,6 +43,7 @@ AGENT_REGISTRY = {
     "promotion": PromotionAgent,   # 이벤트/프로모션 수집
     "banner":    BannerAgent,      # v2 — 배너/비주얼 캡처
     "directory": DirectoryAgent,   # v2 — 브랜드/이벤트 목록
+    "order":     OrderAgent,       # 주문서 결제정보 수집
 }
 
 def get_agent(agent_type: str, db=None):
@@ -82,7 +85,7 @@ def get_agent(agent_type: str, db=None):
 |------|------|------|
 | **LLM 불필요** | 모든 분석/추출은 규칙 기반 (RuleAnalyzer) | 플랫폼 감지, 데이터 추출, 키 이름 매핑 |
 | **하드코딩 금지** | 사이트별 로직 없음, 플랫폼 감지 + 템플릿으로 동적 대응 | 추출 전략 + 필드 매핑 패턴 |
-| **봇 차단 대응** | Stealth 브라우저 + 인간형 행동 + 적응형 백오프 | ANTI_BOT.md 참조 |
+| **봇 차단 대응** | Stealth 브라우저 + 인간형 행동 + 적응형 백오프 + 프록시 로테이션 + 소프트 차단 감지 | ANTI_BOT.md 참조 |
 | **이중화** | OCR (Document Parse → Tesseract), 추출 (API → DOM fallback) | 자동 폴백 |
 | **쿠키 영속화** | 도메인별 쿠키 저장으로 로그인 세션 유지 | data/cookies/ 디렉토리 |
 | **UI-Agent 분리** | UI는 사용자 친화적 필드, Agent는 내부 필드 | `_normalize_config()` 변환 레이어 |
@@ -96,9 +99,11 @@ def get_agent(agent_type: str, db=None):
 | 트리거 | 방식 | 코드 |
 |--------|------|------|
 | CLI 개별 실행 | `python main.py run --id 1` | `agent.run_site(site_id)` |
+| CLI 프록시 실행 | `python main.py run --id 1 --proxy` | `agent.enable_proxy()` → `run_site()` |
 | CLI 전체 실행 | `python main.py run` | `agent.run_all()` → 활성 사이트 순회 |
 | CLI 에이전트별 | `python main.py run --agent product` | 해당 타입만 `run_all()` |
 | Web UI 실행 | `POST /api/crawl/run {"site_ids": [1,2]}` | `subprocess.Popen(main.py run --id N)` |
+| Web UI 프록시 | `POST /api/crawl/run {"site_ids": [1], "use_proxy": true}` | `subprocess.Popen(... --proxy)` |
 | Web UI 일괄 실행 | 카테고리별/주기별 버튼 | 여러 site_id를 각각 별도 프로세스로 실행 |
 
 ### 3.2 실행 전제 조건
@@ -134,23 +139,40 @@ crawl_sites 테이블의 agent_type 컬럼으로 결정
 |------|--------|------|
 | DB 연결 | `self.db` (CrawlDB) | SQLite DB CRUD |
 | 브라우저 | `self.browser_mgr` (BrowserManager) | Playwright Stealth 브라우저 |
+| 페이지 생성 | `_create_page()` | 프록시 포함 브라우저 페이지 생성 헬퍼 |
 | config 파싱 | `get_crawl_config(site)` | crawl_config JSON → dict |
-| 안전 이동 | `_safe_goto(url)` | 429/503 시 적응형 백오프 재시도 |
-| 차단 감지 | `_is_blocked(resp)` | HTTP 429/403/503 판별 |
+| 안전 이동 | `_safe_goto(url)` | 429/503 시 적응형 백오프 + 프록시 교체 + 소프트 차단 감지 |
+| 차단 감지 | `_is_blocked(resp)` | HTTP 상태(429/403/503) + 소프트 차단(빈 페이지/이미지만) 통합 감지 |
+| HTTP 차단 | `_is_http_blocked(resp)` | HTTP 상태 코드만 체크 (static, _safe_goto 내부용) |
+| 소프트 차단 | `_is_soft_blocked()` | DOM 분석으로 빈 페이지/이미지만 페이지 감지 |
+| 프록시 활성화 | `enable_proxy()` | 무료 프록시 IP 로테이션 활성화 |
+| 프록시 교체 | `_rotate_proxy()` | 차단 시 프록시 교체 + 컨텍스트 재생성 |
 | 인간형 딜레이 | `_delay()`, `_human_delay()` | 정규분포 기반 가변 딜레이 (평균 3.5초) |
 | 인간형 스크롤 | `_human_scroll()` | 가변 스크롤 + 중간 정지 + 역스크롤(20%) |
 | 인간형 체류 | `_human_dwell()` | 페이지 로드 후 체류 + 마우스 이동 |
 | 쿠키 도메인 | `_get_cookie_domain(url)` | URL에서 쿠키 영속화 도메인 추출 |
 
-### 4.2 적응형 백오프 (봇 차단 대응)
+### 4.2 적응형 백오프 + 프록시 로테이션 (봇 차단 대응)
 
 ```
-429/503 응답 시:
+429/503 응답 시 (프록시 모드):
+  1차 대응: 연속 2회 차단 → 프록시 IP 교체 (컨텍스트 재생성)
+  2차 대응: 프록시 교체 불가 시 → 적응형 백오프 (120s~600s)
+
+429/503 응답 시 (일반 모드):
   기본 대기: 120초
   지수 백오프: 120s → 240s → 480s (최대 600초)
   랜덤 지터: ±30%
   최대 재시도: 5회
   도메인별 이력 추적 → 연속 차단 시 대기시간 자동 증가
+
+403 (IP 차단) 응답 시:
+  프록시 모드: 즉시 프록시 교체
+  일반 모드: 해당 페이지 건너뜀
+
+HTTP 200 소프트 차단 (이미지만/빈 페이지) 시:
+  프록시 모드: 즉시 프록시 교체 후 재접속
+  일반 모드: 그대로 반환 (에이전트가 판단)
 
 선제적 대기:
   최근 5분 내 429 이력 → 30~120초 쿨다운 후 요청
@@ -158,7 +180,43 @@ crawl_sites 테이블의 agent_type 컬럼으로 결정
 
 > 봇 차단 대응 기술 상세: `ANTI_BOT.md` 참조
 
-### 4.3 추상 메서드 (서브클래스 필수 구현)
+### 4.3 로그인 계정 로테이션
+
+```
+로그인이 필요한 사이트:
+  1. _get_next_credential(site_id)
+     → site_credentials에서 활성 계정 조회
+     → last_used_at ASC NULLS FIRST 정렬 (라운드로빈)
+     → 선택된 계정의 last_used_at 갱신
+
+  2. _do_login(page, credential, login_config)
+     → login_config에 셀렉터 지정 가능:
+        login_url, id_selector, pwd_selector, submit_selector, success_indicator
+     → 미지정 시 범용 폼 탐지:
+        input[type=password] 기준으로 ID 필드/제출 버튼 역추적
+     → 인간형 입력 지연 (300~700ms)
+
+  소프트 차단 대응 (프록시 모드):
+     로그인 페이지 접속 후 소프트 차단 감지 시:
+       → _is_soft_blocked(): 이미지만/빈 페이지 검사
+       → 또는 로그인 폼(input[type=password]) 미발견
+       → 프록시 교체 후 로그인 페이지 재접속 (최대 3회)
+
+     판정 흐름:
+       login_url 접속 → _is_soft_blocked()?
+         Yes → 프록시 교체 → login_url 재접속 (최대 3회)
+         No  → 폼 탐지 → input[type=password] 발견?
+           Yes → 로그인 진행
+           No  → 소프트 차단 추정 → 프록시 교체 후 재시도 (최대 3회)
+
+사용 패턴 (에이전트 run_site 내부):
+  credential = self._get_next_credential(site_id)
+  if credential:
+      login_cfg = crawl_cfg.get("login_config", {})
+      self._do_login(self.page, credential, login_cfg)
+```
+
+### 4.4 추상 메서드 (서브클래스 필수 구현)
 
 ```python
 @property
@@ -401,6 +459,16 @@ Playwright Stealth Chromium 브라우저 관리
   - 리소스 필터링 (font, media 차단)
   - 도메인 허용 목록 (allowed_domains)
   - 쿠키 영속화 (도메인별 JSON 파일 저장/로드)
+  - 프록시 지원: context-level 프록시 설정
+  - 프록시 교체: recreate_context()로 브라우저 재시작 없이 IP 교체
+
+주요 메서드:
+  - create(config, cookie_domain, headless, proxy)
+      → Stealth 브라우저 시작 + 프록시 설정
+  - recreate_context(proxy)
+      → 기존 컨텍스트 종료 + 새 프록시로 컨텍스트 재생성
+      → 쿠키 저장/로드, 리소스 필터링 재설정
+  - save_cookies() / close()
 
 브라우저 플래그:
   - --disable-blink-features=AutomationControlled
@@ -412,6 +480,42 @@ Stealth 적용 항목:
   - navigator.platform = "Win32"
   - navigator.webdriver = undefined (자동화 플래그 은닉)
   - window.chrome 객체 구조 시뮬레이션
+```
+
+### 8.5 ProxyManager (core/proxy_manager.py)
+
+```
+무료 프록시 IP 로테이션 관리
+
+기능:
+  - 8개 무료 소스에서 HTTP/SOCKS4/SOCKS5 프록시 자동 수집
+  - 병렬 검증 (httpbin.org/ip 테스트, 50개 후보 중 15개 목표)
+  - 캐시 파일 관리 (data/proxies/proxy_list.json, 30분 TTL)
+  - 라운드로빈 / 랜덤 로테이션
+  - 블랙리스트 관리 (차단된 프록시 자동 제외)
+  - 모듈 레벨 싱글톤: get_proxy_manager()
+
+주요 메서드:
+  - get_next()          → 라운드로빈으로 다음 프록시 반환
+  - get_random()        → 랜덤 프록시 반환
+  - rotate_on_block()   → 현재 프록시 블랙리스트 + 새 프록시 반환
+  - refresh()           → 프록시 목록 새로 수집 + 검증
+
+프록시 소스:
+  - ProxyScrape (HTTP, SOCKS4, SOCKS5)
+  - TheSpeedX (HTTP, SOCKS5)
+  - clarketm (HTTP)
+  - monosans (HTTP, SOCKS5)
+
+캐시 파일 구조:
+  data/proxies/proxy_list.json
+  {
+    "fetched_at": 1717587600,
+    "count": 15,
+    "proxies": [
+      {"server": "http://1.2.3.4:8080", "source": "proxyscrape_http", ...}
+    ]
+  }
 ```
 
 ### 8.2 NetworkInterceptor (core/network_interceptor.py)
@@ -533,6 +637,17 @@ ocr_usage_log (
   text_length, price_count, elapsed_ms, error_msg,
   created_at
 )
+
+-- 사이트별 로그인 계정 (복수 계정, 로테이션 지원)
+site_credentials (
+  id, site_id,
+  login_id,             -- 로그인 ID
+  login_pwd,            -- 로그인 비밀번호
+  label,                -- 계정 라벨 (예: '본계정', '테스트용')
+  is_active,            -- 활성/비활성
+  last_used_at,         -- 마지막 사용 시각 (로테이션 기준)
+  created_at
+)
 ```
 
 ---
@@ -546,8 +661,10 @@ ocr_usage_log (
 [수집 실행]
   실행 트리거 → agent_type으로 Agent 선택
     → crawl_config 로드 + _normalize_config()
-    → 브라우저 시작 (Stealth Chromium, 쿠키 로드)
-    → 사이트 접속 (적응형 백오프 + 인간형 행동)
+    → (--proxy 시) enable_proxy() → ProxyManager 초기화
+    → 브라우저 시작 (_create_page: Stealth Chromium + 프록시 + 쿠키 로드)
+    → 사이트 접속 (_safe_goto: 적응형 백오프 + 프록시 교체 + 소프트 차단 감지)
+    → (로그인 필요 시) _do_login() (소프트 차단 시 프록시 교체 후 재시도)
     → 플랫폼 감지 (ProductAgent만)
     → 데이터 수집 (전략별 추출)
     → 결과 저장 (DB crawl_results + JSON 파일)
@@ -802,7 +919,9 @@ event_status_filter = 'active'   → 진행 중만
 │              BaseAgent (추상 클래스)                                  │
 │              ├── CrawlDB (SQLite)                                   │
 │              ├── BrowserManager (Playwright Stealth)                 │
-│              ├── 적응형 백오프 (429/503 대응)                          │
+│              ├── ProxyManager (무료 프록시 IP 로테이션)                 │
+│              ├── 적응형 백오프 (429/503 대응) + 프록시 교체              │
+│              ├── 소프트 차단 감지 (HTTP 200 빈 페이지/이미지만)          │
 │              └── 인간형 행동 시뮬레이션                                 │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -1294,8 +1413,9 @@ v2 에이전트도 기존 공통 인프라를 그대로 활용:
 
 | 인프라 | 활용 | 비고 |
 |--------|------|------|
-| BaseAgent | 모든 v2 에이전트가 상속 | 봇 차단 대응, 적응형 백오프 |
-| BrowserManager | 그대로 사용 | Stealth Chromium, 쿠키 영속화 |
+| BaseAgent | 모든 v2 에이전트가 상속 | 봇 차단 대응, 적응형 백오프, 프록시 로테이션, 소프트 차단 감지 |
+| BrowserManager | 그대로 사용 | Stealth Chromium, 쿠키 영속화, 프록시 context 지원 |
+| ProxyManager | --proxy 옵션 시 활성화 | 무료 프록시 수집/검증/로테이션 |
 | RuleAnalyzer | ProductCollector에서 선택적 활용 | 자동 플랫폼 감지 (필수가 아닌 보조) |
 | NetworkInterceptor | ProductCollector에서 API 탐지 시 | 네트워크 기반 상품 데이터 탐지 |
 | strategies/ | ProductCollector에서 선택적 활용 | state_var, dom, api 추출 |
@@ -1326,10 +1446,77 @@ v2 에이전트도 기존 공통 인프라를 그대로 활용:
 
 ---
 
-## 16. 관련 문서
+## 16. OrderAgent (agents/order/engine.py)
+
+### 16.1 개요
+
+면세점 주문서 페이지에서 결제 요약(정상가/할인/혜택/결제금액)과 장바구니 상품 정보를 수집한다.
+로그인 필수 → 주문서 페이지 접속 → 결제정보/상품 추출.
+
+**별도 에이전트 근거**: 상품 목록 수집과 완전히 다른 패턴 — 로그인 필수, 주문서 고유 DOM 구조, 결제 요약 데이터.
+
+### 16.2 수집 파이프라인
+
+```
+run_site(site_id)
+  │
+  ├── _normalize_config()
+  ├── 브라우저 시작
+  │
+  ├── _get_next_credential()     계정 로테이션 (라운드로빈)
+  ├── _safe_goto(login_url)      로그인 페이지 이동
+  ├── _do_login()                범용 로그인 (자동 폼 탐지)
+  │
+  ├── _safe_goto(order_url)      주문서 페이지 이동 (도메인 다를 수 있음)
+  ├── _human_dwell + _human_scroll
+  │
+  ├── _JS_EXTRACT_ORDER_PAYMENT  결제정보 + 장바구니 추출
+  │     ├── 장바구니 상품: 상품명/수량/정상가/판매가/브랜드
+  │     └── 결제 요약: 정상가/회원할인/혜택/결제금액/면세한도/적립
+  │
+  └── _save_json()               order_payment.json + crawl_result.json
+```
+
+### 16.3 crawl_config 필드
+
+| 필드 | 기본값 | 설명 |
+|------|--------|------|
+| `login_url` | '' | 로그인 페이지 URL (비워두면 site_url) |
+| `order_url` | '' | 주문서 페이지 URL (비워두면 site_url) |
+| `collect_items` | true | 장바구니 상품 수집 여부 |
+| `collect_payment` | true | 결제 요약 수집 여부 |
+| `login_config` | {} | 로그인 폼 셀렉터 (비워두면 자동 탐지) |
+
+### 16.4 결제정보 라벨 매핑
+
+| 한국어 라벨 | 영문 키 |
+|------------|---------|
+| 정상가/상품금액 | `regular_price` |
+| 회원할인 | `member_discount` |
+| 혜택/할인혜택 | `benefits` |
+| 쿠폰할인 | `coupon_discount` |
+| 결제금액 | `payment_amount` |
+| 최종결제금액 | `final_payment` |
+| 면세한도적용금액 | `duty_free_limit` |
+| 과세포인트 | `tax_point` |
+| 적립/L.POINT | `reward_points` |
+| 배송비 | `shipping_fee` |
+| 할인율 | `discount_rate` |
+
+### 16.5 대상 사이트
+
+| ID | 사이트 | 로그인 URL | 주문서 URL |
+|----|--------|-----------|-----------|
+| 54 | 롯데면세점 주문서 | kor.lottedfs.com/kr/login | kor.lps.lottedfs.com/kr/newOrder |
+| (예정) | 신라면세점 주문서 | shilladfs.com 로그인 | 신라 주문서 URL |
+| (예정) | 현대면세점 주문서 | hddfs.com 로그인 | 현대 주문서 URL |
+
+---
+
+## 17. 관련 문서
 
 | 문서 | 경로 | 내용 |
 |------|------|------|
 | UI 설계 문서 | `web/UI_DESIGN.md` | 웹 대시보드 UI/페이지/API/스타일 설계 |
-| 봇 차단 대응 | `web/ANTI_BOT.md` | 5계층 봇 차단 우회 기술 상세 |
+| 봇 차단 대응 | `web/ANTI_BOT.md` | 6계층 봇 차단 우회 기술 (프록시 로테이션 + 소프트 차단 감지 포함) |
 | 진행사항 | `web/PROGRESS.md` | 전체 개발 이력 (Phase 1~16) |

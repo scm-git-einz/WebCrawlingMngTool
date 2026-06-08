@@ -1259,3 +1259,274 @@ ProductAgent에서 PromotionAgent를 분리해야 함.
    - 기존 롯데(`#grdDscntRt`) / 신라(`span.rate`) 이후 fallback으로 동작
 
 **수정된 파일**: `agents/product/engine.py` (_JS_EXTRACT_DETAIL 섹션 5-a2, 6-a 할인율)
+
+---
+
+### Phase 19-5. 롯데면세점 URL 재변경 (추천 랭킹 → 베스트 상품)
+> rankingTrending/main은 추천 테마 카드 표시 — best로 재변경
+
+**사용자 요청**: 롯데면세점(35) 수집 결과가 프로모션 테마("청소를 하자! 봄 청소템" 등)로 수집됨
+
+**원인 분석**: `rankingTrending/main` URL은 "추천 랭킹" 탭이 기본 — 테마 카드(이미지+제목)를 상품으로 오인. 실제 상품 베스트셀러는 `rankingTrending/best` 경로
+
+**증상**:
+- 상품명이 프로모션 테마명 ("뷰티 빅 세일 ~66%", "꿀잠 부르는 꿀템")
+- "$20이하 갓성비 육아템"이 `$` 시작으로 price 필드로 오분류
+- 가격/브랜드 없음, description은 저작권 안내문
+- 데이터 중복 (rank 1-6 = rank 7-10 반복)
+
+**수정 내역**:
+- 롯데면세점(35) URL: `rankingTrending/main` → `rankingTrending/best` (DB 직접 수정)
+
+**수정된 파일**: DB(crawl_sites.site_url)
+
+---
+
+### Phase 20. 사이트별 로그인 계정 관리
+> 로그인이 필요한 사이트의 계정 등록/관리 + 크롤링 시 계정 로테이션
+
+**사용자 요청**: 로그인 ID/PWD를 입력하고 관리할 수 있도록. 사이트별 계정 여러 개 등록 가능. 크롤링 시 계정 순환 사용.
+
+**작업 내역**:
+
+1. `core/db.py` — **site_credentials 테이블 + CRUD 메서드**
+   - `site_credentials` 테이블: site_id, login_id, login_pwd, label, is_active, last_used_at
+   - `add_credential()`, `get_credentials()`, `get_active_credentials()`: 생성/조회
+   - `update_credential()`, `delete_credential()`, `toggle_credential()`: 수정/삭제/토글
+   - `mark_credential_used()`: 사용 시각 갱신 (로테이션 기준)
+   - `get_active_credentials()`: last_used_at ASC NULLS FIRST 정렬 (라운드로빈)
+
+2. `web/backend/routes/sites.py` — **Credential REST API**
+   - `GET /api/sites/{id}/credentials`: 사이트 계정 목록
+   - `POST /api/sites/{id}/credentials`: 계정 추가
+   - `PUT /api/sites/credentials/{cred_id}`: 계정 수정
+   - `DELETE /api/sites/credentials/{cred_id}`: 계정 삭제
+   - `PUT /api/sites/credentials/{cred_id}/toggle`: 활성/비활성 토글
+   - `GET /api/sites/{id}` 응답에 `credentials` 배열 추가
+
+3. `web/frontend/src/pages/SiteSettings.jsx` — **CredentialManager 컴포넌트**
+   - 모든 에이전트 유형 공통으로 ConfigModal 하단에 표시
+   - 계정 테이블: 라벨, ID, 비밀번호(마스킹/보기 토글), 활성 상태, 최근 사용 시각
+   - 추가/수정 폼: 라벨(선택), ID(필수), 비밀번호(필수) 3열 그리드
+   - 삭제 시 ConfirmModal(danger) 적용
+   - 활성/비활성 배지 클릭으로 토글
+
+4. `web/frontend/src/App.css` — **Credential 스타일**
+   - `.credential-section`, `.credential-header`: 섹션 레이아웃
+   - `.credential-table`: 계정 목록 테이블 (비활성 행 투명도)
+   - `.pwd-cell`, `.btn-icon`: 비밀번호 보기/숨기기
+   - `.credential-form`, `.credential-form-grid`: 추가/수정 폼 (3열 그리드)
+
+5. `core/base_agent.py` — **로그인 계정 로테이션 + 범용 로그인**
+   - `_get_next_credential(site_id)`: 라운드로빈 로테이션 (last_used_at 기준)
+   - `_do_login(page, credential, login_config)`: 범용 로그인 수행
+     - login_config로 셀렉터 지정 가능 (login_url, id_selector, pwd_selector, submit_selector, success_indicator)
+     - config 미지정 시 자동 폼 탐지: input type=password 기준으로 ID 필드/제출 버튼 역추적
+     - 인간형 입력 지연 (300~700ms)
+
+**수정된 파일**:
+- `core/db.py` (site_credentials 테이블 + 7개 CRUD 메서드)
+- `core/base_agent.py` (_get_next_credential, _do_login)
+- `web/backend/routes/sites.py` (5개 API 엔드포인트 + 상세 응답 확장)
+- `web/frontend/src/pages/SiteSettings.jsx` (CredentialManager 컴포넌트 + ConfigModal 통합)
+- `web/frontend/src/App.css` (credential 스타일)
+
+---
+
+### Phase 21. 주문서 결제정보 수집 에이전트 (OrderAgent)
+> 면세점 주문서 페이지에서 결제 요약 + 장바구니 상품 정보를 수집
+
+**사용자 요청**: 롯데면세점 주문서의 최종결제금액 정보를 수집하려고 합니다. 기존 상품 수집과 별도로 주문서 수집 Agent가 필요. 롯데/신라/현대면세점 공통.
+
+**설계 결정**:
+- 기존 ProductAgent와 완전히 다른 수집 패턴: 로그인 필수 → 주문서 페이지 → 결제정보 추출
+- 별도 에이전트 타입 `order` 신설
+- 카테고리 `주문서` 추가, `💳` 아이콘, 녹색(#059669) 배경
+
+**작업 내역**:
+
+1. `agents/order/__init__.py` — 패키지 초기화
+2. `agents/order/engine.py` — **OrderAgent 구현**
+   - BaseAgent 상속, agent_type = 'order'
+   - `_normalize_config()`: login_url, order_url, collect_items, collect_payment, login_config
+   - `run_site()` 파이프라인:
+     1. 브라우저 시작
+     2. `_get_next_credential()` → `_do_login()` 로그인
+     3. 주문서 페이지 이동 (order_url, 도메인이 다를 수 있음)
+     4. `_JS_EXTRACT_ORDER_PAYMENT` 실행 → 결제정보 + 장바구니 추출
+     5. DB + JSON 저장
+   - `_JS_EXTRACT_ORDER_PAYMENT` JS 스니펫:
+     - 장바구니 상품: 범용 셀렉터로 상품명/수량/정상가/판매가/브랜드/이미지 추출
+     - 결제정보 요약: dl/dt-dd, table th-td, 범용 라벨-값 구조 탐색
+     - `LABEL_MAP`: 정상가/회원할인/혜택/결제금액/면세한도/과세포인트/적립 등 12개 한국어 라벨→영문키 매핑
+   - `_save_json()`: `order_payment.json` + `crawl_result.json`
+
+3. `agents/__init__.py` — AGENT_REGISTRY에 `order: OrderAgent` 등록 (총 7개)
+
+4. `web/frontend/src/pages/SiteSettings.jsx` — **UI 추가**
+   - `CATEGORY_LABELS`에 `주문서: { icon: 💳, color: #059669 }` 추가
+   - `agentTypeFromCategory()`에 `주문서 → order` 매핑
+   - `AGENT_TYPE_LABELS`에 `order: 주문서 수집` 추가
+   - `AGENT_BADGE_CLASS`에 `order: order-badge` 추가
+   - ConfigModal에 `order → OrderConfig` 분기 추가
+   - `OrderConfig` 컴포넌트 신규:
+     - 페이지 URL 섹션: 로그인 URL + 주문서 URL (선택, 비워두면 사이트 URL 사용)
+     - 수집 항목: 결제정보 수집 / 장바구니 상품 수집 토글
+     - 로그인 폼 셀렉터 (선택): ID/PWD/버튼/성공지표 4개 입력 (자동 탐지 가능)
+
+5. `web/frontend/src/pages/CrawlResults.jsx` — **결과 뷰 추가**
+   - `AGENT_LABELS`에 `order: 주문서 수집` 추가
+   - `ExpandedDetail`에 `order → OrderDetail` 분기 추가
+   - `OrderDetail` 컴포넌트: 결제정보 요약 테이블 + 장바구니 상품 테이블
+   - `PAYMENT_LABELS`: 12개 결제 필드 한국어 표시 매핑
+
+6. `web/frontend/src/App.css` — **스타일 추가**
+   - `.badge.order-badge`: 녹색 배지
+   - `.order-toggle-row`: 수집 항목 체크박스 카드
+   - `.order-selector-grid`: 셀렉터 입력 2열 그리드
+   - `.order-payment-card`, `.order-total-row`: 결제정보 결과 카드
+
+7. **DB: 롯데면세점 주문서 사이트 등록**
+   - site_id=54, agent_type='order', category='주문서'
+   - login_url: `https://kor.lottedfs.com/kr/login`
+   - order_url: `https://kor.lps.lottedfs.com/kr/newOrder`
+   - 로그인 계정: ehdsp (site 35에서 복사)
+
+**생성된 파일**:
+- `agents/order/__init__.py`
+- `agents/order/engine.py`
+
+**수정된 파일**:
+- `agents/__init__.py` (AGENT_REGISTRY에 order 추가)
+- `web/frontend/src/pages/SiteSettings.jsx` (OrderConfig + 카테고리 매핑)
+- `web/frontend/src/pages/CrawlResults.jsx` (OrderDetail 결과 뷰)
+- `web/frontend/src/App.css` (order 스타일)
+
+---
+
+### Phase 22. 프록시 IP 로테이션 시스템
+
+> 무료 프록시를 자동 수집/검증하여 IP 로테이션으로 봇 차단 우회
+
+**사용자 요청**: 무료 프록시 IP를 사용하여 자동 로테이션하면서 데이터 수집
+
+**작업 내역**:
+
+1. `core/proxy_manager.py` — **ProxyManager 신규 구현**
+   - 8개 무료 프록시 소스에서 HTTP/SOCKS4/SOCKS5 프록시 수집
+   - 병렬 검증 (httpbin.org/ip 테스트, 최대 50개 후보 중 15개 목표)
+   - 캐시 파일 관리 (data/proxies/proxy_list.json, 30분 TTL)
+   - 라운드로빈/랜덤 로테이션 + 블랙리스트 관리
+   - 모듈 레벨 싱글톤 `get_proxy_manager()`
+
+2. `core/browser.py` — **프록시 지원 추가**
+   - `create()` 메서드에 `proxy` 파라미터 추가
+   - `recreate_context()` 메서드 신규: 프록시 교체 시 컨텍스트만 재생성 (브라우저 재시작 불필요)
+   - Playwright context-level 프록시 설정
+
+3. `core/base_agent.py` — **프록시 로테이션 통합**
+   - `enable_proxy()`: 프록시 모드 활성화
+   - `_create_page()`: 프록시 포함 브라우저 페이지 생성 헬퍼
+   - `_rotate_proxy()`: 프록시 교체 + 컨텍스트 재생성
+   - `_safe_goto()` 수정: 429/503 연속 2회 시 프록시 교체 우선, 403 시 즉시 교체
+   - `_is_soft_blocked()`: HTTP 200 소프트 차단 감지 (이미지만/빈 페이지/폼 없음)
+   - `_is_blocked()`: @staticmethod → 인스턴스 메서드로 변경, HTTP 상태 + 소프트 차단 통합 감지
+     → 모든 에이전트의 15+ 호출 지점에서 코드 변경 없이 소프트 차단 자동 감지
+   - `_is_http_blocked()`: HTTP 상태만 체크하는 static 메서드 분리 (_safe_goto 내부용)
+   - `_safe_goto()` 수정: 프록시 유무와 관계없이 항상 소프트 차단 감지, 캐시로 중복 DOM 검사 방지
+   - `_do_login()` 수정: page.goto → _safe_goto 사용, 로그인 폼 미발견 시 프록시 교체 후 재시도 (최대 3회)
+
+4. **7개 에이전트 모두 수정**: `browser_mgr.create()` → `self._create_page()` 변경
+   - product, news, cafe, promotion, banner, directory, order
+
+5. `main.py` — CLI `--proxy` 옵션 추가
+   - `python main.py run --id N --proxy`
+
+6. `web/backend/routes/proxy.py` — **프록시 관리 API 신규**
+   - `GET /api/proxy/status`: 프록시 풀 상태 조회
+   - `POST /api/proxy/refresh`: 프록시 목록 갱신
+   - `GET /api/proxy/list`: 프록시 목록 상세 조회
+
+7. `web/backend/routes/sites.py` — 크롤링 실행 API에 `use_proxy` 파라미터 추가
+8. `web/backend/app.py` — proxy 라우터 등록
+9. `web/ANTI_BOT.md` — Layer 6: 프록시 IP 로테이션 문서 추가
+
+**생성된 파일**:
+- `core/proxy_manager.py`
+- `web/backend/routes/proxy.py`
+
+**수정된 파일**:
+- `core/browser.py` (proxy 파라미터 + recreate_context)
+- `core/base_agent.py` (프록시 로테이션 + _create_page)
+- `agents/product/engine.py` (_create_page 사용)
+- `agents/news/engine.py` (_create_page 사용)
+- `agents/cafe/engine.py` (_create_page 사용)
+- `agents/promotion/engine.py` (_create_page 사용)
+- `agents/banner/engine.py` (_create_page 사용)
+- `agents/directory/engine.py` (_create_page 사용)
+- `agents/order/engine.py` (_create_page 사용)
+- `main.py` (--proxy CLI 옵션)
+- `web/backend/app.py` (proxy 라우터 등록)
+- `web/backend/routes/sites.py` (use_proxy 파라미터)
+- `web/ANTI_BOT.md` (Layer 6 문서)
+
+---
+
+### Phase 23. 브랜드 지점 목록 수집 기능 (DirectoryAgent brand_branch 모드)
+
+> 면세점 브랜드 매장 정보(브랜드명, 지점, 위치/층, 카테고리, 전화번호)를 카테고리별/지점별 전체 수집
+
+**사용자 요청**: 롯데면세점 브랜드 지점 페이지에서 카테고리별 전체 브랜드, 위치, 전화번호를 수집. 다른 면세점에도 유사 구조로 적용 가능해야 함.
+
+**페이지 분석 결과**:
+- API: `POST /kr/customer/brndBrchListAjax` (HTML 응답)
+- 카테고리 탭(01~12) + 지점별 그룹 + "더보기" 페이지네이션
+- 데이터 구조: `dl > dt` (브랜드명), `dd > ul > li` (위치, 카테고리), `dd.tel` (전화번호)
+- 17개 지점 (국내 7 + 해외 10), 총 3,667개 브랜드 항목
+
+**작업 내역**:
+
+1. `agents/directory/engine.py` — **brand_branch 수집 모드 추가**
+   - `_collect_brand_branch(cfg)`: 카테고리 탭 탐지 → 지점별 "더보기" 전체 로드 → dl/dt/dd 파싱
+   - `_load_all_more(cfg)`: 모든 지점의 더보기 버튼 순차 클릭 (max_rounds=200)
+   - `_JS_DETECT_CATEGORY_TABS`: 카테고리 탭 탐지 (catChange 함수 기반)
+   - `_JS_EXTRACT_BRAND_BRANCH`: 롯데면세점 #brchBrndInfo 전용 dl/dt/dd 추출
+   - `_JS_EXTRACT_BRAND_BRANCH_FALLBACK`: 범용 fallback (table/dl 구조)
+   - `_JS_CLICK_NEXT_MORE`: 지점별 더보기 버튼 자동 클릭
+   - `_normalize_config()`: categories, load_all_pages 필드 추가
+   - `_filter_items()`: location, phone, branch 메타 필드 추가
+
+2. `web/frontend/src/pages/SiteSettings.jsx` — **UI 변경**
+   - ConfigModal: 사이트명/URL 인라인 편집 기능 추가 (PUT /api/sites/{id})
+   - DirectoryConfig: `brand_branch` 목록 유형 추가 (🏬 브랜드 지점)
+   - DIR_FIELD_OPTIONS: branch(지점명), location(위치/층), phone(전화번호) 필드 추가
+   - brand_branch 선택 시 기본 필드 자동 설정 + index_navigation 비활성화
+   - CATEGORY_DEFAULT_CONFIGS['브랜드목록']: brand_branch 기본 설정
+
+3. `web/frontend/src/pages/CrawlResults.jsx` — **결과 뷰 변경**
+   - DirectoryDetail: 지점/위치/전화번호 조건부 컬럼 추가
+   - 지점 수 통계 표시
+
+4. **DB 업데이트** (site_id=51)
+   - 사이트명: 롯데면세점 랭킹 → 롯데면세점 브랜드지점
+   - URL: rankingTrending/main → /kr/customer/brndBrch
+   - crawl_config: list_type=brand_branch, collect_fields=[name,category,location,phone,branch]
+
+**수집 결과 스키마** (모든 면세점 공통):
+```json
+{
+  "name": "브랜드명 (한글+영문)",
+  "branch": "지점명",
+  "location": "위치 (층)",
+  "category": "카테고리",
+  "phone": "전화번호",
+  "collected_at": "2026-06-08T14:30:00"
+}
+```
+
+**수정된 파일**:
+- `agents/directory/engine.py` (brand_branch 모드 + JS 4개 + 메서드 2개)
+- `web/frontend/src/pages/SiteSettings.jsx` (ConfigModal 편집 + DirectoryConfig + 기본 설정)
+- `web/frontend/src/pages/CrawlResults.jsx` (DirectoryDetail 컬럼 확장)
+
+**검증**: CLI 실행 (`python main.py run --id 51`) → 17개 지점, 3,667개 브랜드 항목 수집 성공

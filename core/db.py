@@ -7,6 +7,7 @@ SQLite DB 연동 모듈
   - extraction_templates:  플랫폼별 추출 템플릿
   - crawl_results:         수집 결과
   - news_keywords:         뉴스 검색 키워드 (사이트별, 활성/비활성)
+  - site_credentials:      사이트별 로그인 계정 (복수 계정, 로테이션 지원)
   - ocr_usage_log:         OCR/Document Parser API 사용 이력
 """
 import json
@@ -124,6 +125,20 @@ class CrawlDB:
                 elapsed_ms    INTEGER NOT NULL DEFAULT 0,
                 error_msg     TEXT,
                 created_at    TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+                FOREIGN KEY (site_id) REFERENCES crawl_sites(id)
+            )
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS site_credentials (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                site_id      INTEGER NOT NULL,
+                login_id     TEXT    NOT NULL,
+                login_pwd    TEXT    NOT NULL,
+                label        TEXT    NOT NULL DEFAULT '',
+                is_active    INTEGER NOT NULL DEFAULT 1,
+                last_used_at TEXT,
+                created_at   TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
                 FOREIGN KEY (site_id) REFERENCES crawl_sites(id)
             )
         """)
@@ -627,6 +642,90 @@ class CrawlDB:
             return 0
 
         return self.add_keywords(site_id, keywords)
+
+    # ═══════════════════════════════════════════════════════════════
+    # site_credentials CRUD
+    # ═══════════════════════════════════════════════════════════════
+
+    def add_credential(
+        self, site_id: int, login_id: str, login_pwd: str, label: str = "",
+    ) -> int:
+        """로그인 계정을 등록하고 생성된 ID를 반환한다."""
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT INTO site_credentials (site_id, login_id, login_pwd, label) "
+            "VALUES (?, ?, ?, ?)",
+            (site_id, login_id, login_pwd, label),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def get_credentials(self, site_id: int) -> list[dict]:
+        """사이트의 모든 로그인 계정을 반환한다."""
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT * FROM site_credentials "
+            "WHERE site_id = ? ORDER BY id",
+            (site_id,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def get_active_credentials(self, site_id: int) -> list[dict]:
+        """사이트의 활성 로그인 계정 목록을 반환한다."""
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT * FROM site_credentials "
+            "WHERE site_id = ? AND is_active = 1 "
+            "ORDER BY last_used_at ASC NULLS FIRST, id ASC",
+            (site_id,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def update_credential(
+        self, cred_id: int, login_id: str, login_pwd: str, label: str = "",
+    ) -> bool:
+        """로그인 계정 정보를 수정한다."""
+        cur = self.conn.cursor()
+        cur.execute(
+            "UPDATE site_credentials "
+            "SET login_id = ?, login_pwd = ?, label = ? WHERE id = ?",
+            (login_id, login_pwd, label, cred_id),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def delete_credential(self, cred_id: int) -> bool:
+        """로그인 계정을 삭제한다."""
+        cur = self.conn.cursor()
+        cur.execute(
+            "DELETE FROM site_credentials WHERE id = ?", (cred_id,),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def toggle_credential(self, cred_id: int) -> dict | None:
+        """로그인 계정의 활성/비활성을 토글한다."""
+        cur = self.conn.cursor()
+        cur.execute("SELECT id, is_active FROM site_credentials WHERE id = ?", (cred_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        new_active = 0 if row["is_active"] else 1
+        cur.execute(
+            "UPDATE site_credentials SET is_active = ? WHERE id = ?",
+            (new_active, cred_id),
+        )
+        self.conn.commit()
+        return {"id": cred_id, "is_active": new_active}
+
+    def mark_credential_used(self, cred_id: int):
+        """로그인 계정 사용 시각을 갱신한다."""
+        cur = self.conn.cursor()
+        cur.execute(
+            "UPDATE site_credentials SET last_used_at = ? WHERE id = ?",
+            (_now(), cred_id),
+        )
+        self.conn.commit()
 
     # ═══════════════════════════════════════════════════════════════
     # ocr_usage_log CRUD

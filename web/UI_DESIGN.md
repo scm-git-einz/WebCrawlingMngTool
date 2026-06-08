@@ -42,7 +42,8 @@ D:\crawling\web\
 │   └── routes/
 │       ├── sites.py              # 사이트 CRUD, 키워드, 스케줄, 실행 API
 │       ├── results.py            # 수집 결과 조회 + 대시보드 통계 API
-│       └── ocr.py                # OCR 사용 이력 API
+│       ├── ocr.py                # OCR 사용 이력 API
+│       └── proxy.py              # 프록시 관리 API (상태/갱신/목록)
 ├── frontend/
 │   ├── package.json
 │   ├── vite.config.js            # proxy → localhost:8000
@@ -590,11 +591,21 @@ OFF: [────●] 회색 배경
 | POST | `/api/sites/{id}/keywords` | 키워드 추가 | `{keyword: '해외여행'}` |
 | DELETE | `/api/sites/{id}/keywords/{kw}` | 키워드 삭제 | - |
 
+### 9.2.1 로그인 계정 관리
+
+| Method | Path | 설명 | 요청 바디 |
+|--------|------|------|----------|
+| GET | `/api/sites/{id}/credentials` | 계정 목록 | - |
+| POST | `/api/sites/{id}/credentials` | 계정 추가 | `{login_id, login_pwd, label?}` |
+| PUT | `/api/sites/credentials/{cred_id}` | 계정 수정 | `{login_id, login_pwd, label?}` |
+| DELETE | `/api/sites/credentials/{cred_id}` | 계정 삭제 | - |
+| PUT | `/api/sites/credentials/{cred_id}/toggle` | 활성/비활성 토글 | - |
+
 ### 9.3 크롤링 실행/중지/로그
 
 | Method | Path | 설명 | 요청 바디/파라미터 |
 |--------|------|------|------------------|
-| POST | `/api/crawl/run` | 크롤링 실행 | `{site_ids: [1,2,3]}` |
+| POST | `/api/crawl/run` | 크롤링 실행 | `{site_ids: [1,2,3], use_proxy?: false}` |
 | GET | `/api/crawl/status` | 실행 중 프로세스 목록 | - |
 | POST | `/api/crawl/stop` | 크롤링 중지 | `{site_id: 1}` |
 | GET | `/api/crawl/logs/{site_id}` | 실행 로그 JSON | `?tail=100` |

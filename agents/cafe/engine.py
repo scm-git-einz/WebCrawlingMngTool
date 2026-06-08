@@ -391,9 +391,7 @@ class CafeAgent(BaseAgent):
 
         try:
             cookie_domain = self._get_cookie_domain(site["site_url"])
-            self.page = self.browser_mgr.create(
-                cookie_domain=cookie_domain,
-            )
+            self.page = self._create_page(cookie_domain=cookie_domain)
 
             # 1. 인기글 목록 수집 (날짜 필터 적용)
             posts = self._collect_popular_list(site, crawl_cfg)

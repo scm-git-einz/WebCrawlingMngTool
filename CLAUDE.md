@@ -12,7 +12,7 @@
 
 **핵심 구조**: 6개 에이전트(product, news, cafe, promotion, banner, directory)가 Stealth 브라우저로 사이트를 수집하고, 결과를 SQLite DB에 저장한다.
 
-**현재 버전**: Phase 17 (2026-05-27 기준)
+**현재 버전**: Phase 20 (2026-06-04 기준)
 - ProductAgent v2: 3단계 페이지 구조 분석(API → JS전역변수 → DOM) + 배지 필터링 + 카드 클릭 상세 수집
 - 상세 수집: description(4단계 fallback + 노이즈 필터링) + spec(테이블/dl 추출) + detail_images(썸네일 필터링)
 - 웹 대시보드: 크롤링 실행/중지/로그 뷰어 + 에이전트별 설정 모달 + URL 분석
@@ -267,6 +267,7 @@ const agentTypeFromCategory = (cat) => {
 ```
 사이트: GET/POST /api/sites, PUT /api/sites/{id}/config, /toggle, /schedule
 키워드: GET/POST /api/sites/{id}/keywords, DELETE .../keywords/{kw}
+계정:   GET/POST /api/sites/{id}/credentials, PUT/DELETE /api/sites/credentials/{cred_id}, PUT .../toggle
 크롤링: POST /api/crawl/run, GET /api/crawl/status, POST /api/crawl/stop
 로그:   GET /api/crawl/logs/{site_id}, GET /api/crawl/logs/{site_id}/raw
 URL분석: POST /api/sites/analyze-url
@@ -315,6 +316,7 @@ AGENT_REGISTRY = {
     "promotion": PromotionAgent,  # 이벤트/프로모션 3단계 수집
     "banner":    BannerAgent,     # v2 — 배너 이미지/텍스트 캡처
     "directory": DirectoryAgent,  # v2 — 브랜드/이벤트 목록
+    "order":     OrderAgent,      # 주문서 결제정보 수집
 }
 ```
 

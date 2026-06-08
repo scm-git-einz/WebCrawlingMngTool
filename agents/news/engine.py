@@ -332,9 +332,7 @@ class NewsAgent(BaseAgent):
         try:
             # 쿠키 영속화
             cookie_domain = self._get_cookie_domain(site["site_url"])
-            self.page = self.browser_mgr.create(
-                cookie_domain=cookie_domain,
-            )
+            self.page = self._create_page(cookie_domain=cookie_domain)
 
             # 키워드 결정 (우선순위 적용)
             search_keywords = self._resolve_keywords(

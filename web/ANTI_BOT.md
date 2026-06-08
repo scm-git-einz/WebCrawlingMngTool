@@ -2,11 +2,11 @@
 
 ## 1. 개요
 
-크롤링 대상 사이트들은 다양한 봇 차단 기술(Rate Limiting, Browser Fingerprinting, Behavior Analysis 등)을 사용한다. 본 플랫폼은 **5가지 계층**의 봇 차단 대응 기술을 적용하여 안정적인 수집을 보장한다.
+크롤링 대상 사이트들은 다양한 봇 차단 기술(Rate Limiting, Browser Fingerprinting, Behavior Analysis 등)을 사용한다. 본 플랫폼은 **6가지 계층**의 봇 차단 대응 기술을 적용하여 안정적인 수집을 보장한다.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                  봇 차단 대응 5계층 구조                       │
+│                  봇 차단 대응 6계층 구조                       │
 │                                                              │
 │  ┌────────────────────────────────────────────────────────┐  │
 │  │ Layer 1. Stealth 브라우저           (core/browser.py)  │  │
@@ -27,6 +27,11 @@
 │  ┌────────────────────────────────────────────────────────┐  │
 │  │ Layer 5. 쿠키 영속화 + 네트워크 최적화                   │  │
 │  │  세션 유지 + 불필요 리소스 차단 + Referer 체인            │  │
+│  └────────────────────────────────────────────────────────┘  │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │ Layer 6. 프록시 IP 로테이션      (core/proxy_manager.py) │  │
+│  │  무료 프록시 수집/검증 + 차단 시 자동 IP 교체             │  │
+│  │  소프트 차단 감지 (HTTP 200 빈 페이지/이미지만)           │  │
 │  └────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -466,13 +471,31 @@ self._last_url = url
 ### 7.1 차단 판별 (`_is_blocked`)
 
 ```python
-@staticmethod
-def _is_blocked(resp) -> bool:
-    """응답이 차단(429/403/503)인지 확인"""
+def _is_blocked(self, resp, check_soft=True) -> bool:
+    """2단계 차단 감지: HTTP 상태 + 소프트 차단"""
     if resp is None:
         return False
-    return resp.status in (429, 403, 503)
+
+    # 1단계: HTTP 상태 코드
+    if resp.status in (429, 403, 503):
+        return True
+
+    # 2단계: HTTP 200이지만 소프트 차단 (빈 페이지, 이미지만)
+    if check_soft and resp.status == 200:
+        # _safe_goto에서 검사한 캐시 재활용 (중복 DOM 검사 방지)
+        if self._last_soft_block_url == current_url:
+            return self._last_soft_block_result
+        # 캐시 미스 → DOM 검사 실행
+        if self._is_soft_blocked():
+            if self._use_proxy:
+                self._rotate_proxy()
+            return True
+
+    return False
 ```
+
+**적용 범위**: 모든 에이전트의 모든 `_is_blocked(resp)` 호출 지점 (15+ 위치)에서 자동 적용.
+에이전트 코드 변경 없이 소프트 차단이 감지되면 해당 페이지를 스킵 처리한다.
 
 ### 7.2 HTTP 상태 코드별 대응
 
@@ -480,8 +503,26 @@ def _is_blocked(resp) -> bool:
 |----------|------|------|
 | **429** | Too Many Requests (Rate Limit 초과) | 적응형 백오프 대기 후 재시도 |
 | **503** | Service Unavailable (서버 과부하) | 적응형 백오프 대기 후 재시도 |
-| **403** | Forbidden (접근 차단) | 재시도 없이 해당 페이지 건너뜀 |
+| **403** | Forbidden (접근 차단) | 프록시 교체 시도, 불가 시 건너뜀 |
+| **200 (소프트 차단)** | 이미지만 반환, 빈 페이지 | 프록시 교체 후 재시도 (최대 3회) |
 | **200** | 성공 | 정상 수집 진행, 레이트 리밋 카운터 리셋 |
+
+### 7.2.1 소프트 차단 감지 (`_is_soft_blocked`)
+
+HTTP 200 응답이지만 실질적 콘텐츠가 없는 "소프트 차단" 패턴을 감지한다.
+
+| 패턴 | 판정 조건 | 사례 |
+|------|----------|------|
+| `image_only` | 텍스트 < 50자 + form/input 없음 + 이미지 있음 | 차단 안내 이미지만 표시 |
+| `empty_page` | 텍스트 < 20자 + 구조 요소 없음 + 링크 < 3개 | 완전 빈 HTML |
+| `single_image_page` | body 자식 ≤ 2개 + 이미지 ≥ 1 + 텍스트 < 100자 | 단일 차단 이미지 |
+| `image_response` | Content-Type이 `image/*` | 페이지 자체가 이미지 파일 |
+
+```
+적용 시점:
+  1. _safe_goto() — HTTP 200 응답 후 소프트 차단 검사 → 프록시 교체
+  2. _do_login() — 로그인 페이지 로드 후 소프트 차단/폼 미발견 → 프록시 교체 후 재시도 (최대 3회)
+```
 
 ### 7.3 에이전트별 차단 대응 호출 현황
 
@@ -564,3 +605,71 @@ _EXCLUDE_PATTERNS = [
 | 쿠키 영속화 | `browser.py` | `save_cookies()` / `_load_cookies()` | 수집 시작/종료 시 |
 | 리소스 차단 | `browser.py` | `blocked_resource_types` | 모든 요청 |
 | 트래킹 필터 | `network_interceptor.py` | `_EXCLUDE_PATTERNS` | 네트워크 캡처 시 |
+| 프록시 로테이션 | `proxy_manager.py` | `ProxyManager` | 429/403 차단 시 IP 교체 |
+| 프록시 컨텍스트 | `browser.py` | `recreate_context()` | 프록시 교체 시 컨텍스트 재생성 |
+
+---
+
+## 10. Layer 6: 프록시 IP 로테이션
+
+### 10.1 적용 위치
+- **파일**: `core/proxy_manager.py`, `core/browser.py`, `core/base_agent.py`
+- **CLI 옵션**: `python main.py run --id N --proxy`
+- **웹 API**: `POST /api/crawl/run` body에 `"use_proxy": true`
+
+### 10.2 대응하는 봇 차단 기술
+
+| 차단 기술 | 탐지 방식 | 우회 방법 |
+|----------|----------|----------|
+| IP 기반 Rate Limiting | 동일 IP에서 과도한 요청 | 프록시 풀에서 IP 로테이션 |
+| IP 차단 (403) | 특정 IP를 영구/임시 차단 | 차단된 프록시를 블랙리스트에 추가하고 교체 |
+| GeoIP 필터링 | 특정 국가 IP만 허용 | 다양한 국가의 프록시 사용 |
+
+### 10.3 프록시 수집 소스 (무료)
+
+| 소스 | URL | 프로토콜 |
+|------|-----|---------|
+| ProxyScrape | api.proxyscrape.com | HTTP, SOCKS4, SOCKS5 |
+| TheSpeedX | github.com/TheSpeedX/PROXY-List | HTTP, SOCKS5 |
+| clarketm | github.com/clarketm/proxy-list | HTTP |
+| monosans | github.com/monosans/proxy-list | HTTP, SOCKS5 |
+
+### 10.4 프록시 관리 흐름
+
+```
+프록시 초기화:
+  1. 캐시 파일 확인 (data/proxies/proxy_list.json)
+  2. 캐시 유효(30분 이내) → 캐시에서 로드
+  3. 캐시 만료/없음 → 8개 소스에서 수집 → 병렬 검증 → 캐시 저장
+
+프록시 로테이션:
+  1. 에이전트 시작 시 → enable_proxy() → 초기 프록시 할당
+  2. 정상 응답(200) → 현재 프록시 유지
+  3. 429/503 응답 2회 연속 → 현재 프록시 블랙리스트 + 새 프록시로 교체
+  4. 403 응답 → 즉시 프록시 교체
+  5. 모든 프록시 소진 → 블랙리스트 초기화 + 목록 새로 갱신
+```
+
+### 10.5 검증 프로세스
+
+```python
+# 프록시 검증: httpbin.org/ip 에 요청하여 응답 확인
+# 병렬 10개씩 검증, 최대 50개 후보 중 15개 통과 목표
+# 타임아웃: 8초
+_TEST_URL = "https://httpbin.org/ip"
+_MAX_VALIDATE = 50
+_TARGET_VALID = 15
+```
+
+### 10.6 Playwright 통합
+
+```python
+# 브라우저 컨텍스트에 프록시 적용
+self._context = self._browser.new_context(
+    proxy={"server": "http://ip:port"},
+    ...
+)
+
+# 프록시 교체 시 컨텍스트만 재생성 (브라우저 재시작 불필요)
+page = self.browser_mgr.recreate_context(proxy=new_proxy)
+```

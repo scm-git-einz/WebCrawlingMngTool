@@ -100,6 +100,7 @@ def get_site(site_id: int):
         site["crawl_config"] = db.get_crawl_config(site_id)
         keywords = db.get_keywords(site_id)
         site["keywords"] = [dict(k) for k in keywords]
+        site["credentials"] = db.get_credentials(site_id)
         return site
     finally:
         db.close()
@@ -226,6 +227,81 @@ def remove_keyword(site_id: int, keyword: str):
         db.close()
 
 
+# ─── 로그인 계정 관리 ────────────────────────────────────────
+
+class CredentialBody(BaseModel):
+    login_id: str
+    login_pwd: str
+    label: str = ""
+
+
+class CredentialUpdate(BaseModel):
+    login_id: str
+    login_pwd: str
+    label: str = ""
+
+
+@router.get("/sites/{site_id}/credentials")
+def get_credentials(site_id: int):
+    db = _db()
+    try:
+        return db.get_credentials(site_id)
+    finally:
+        db.close()
+
+
+@router.post("/sites/{site_id}/credentials")
+def add_credential(site_id: int, body: CredentialBody):
+    db = _db()
+    try:
+        site = db.get_site(site_id)
+        if not site:
+            raise HTTPException(404, "사이트를 찾을 수 없습니다")
+        cred_id = db.add_credential(
+            site_id, body.login_id, body.login_pwd, body.label,
+        )
+        return {"id": cred_id, "message": "계정이 추가되었습니다"}
+    finally:
+        db.close()
+
+
+@router.put("/sites/credentials/{cred_id}")
+def update_credential(cred_id: int, body: CredentialUpdate):
+    db = _db()
+    try:
+        ok = db.update_credential(cred_id, body.login_id, body.login_pwd, body.label)
+        if not ok:
+            raise HTTPException(404, "계정을 찾을 수 없습니다")
+        return {"message": "계정이 수정되었습니다"}
+    finally:
+        db.close()
+
+
+@router.delete("/sites/credentials/{cred_id}")
+def delete_credential(cred_id: int):
+    db = _db()
+    try:
+        ok = db.delete_credential(cred_id)
+        if not ok:
+            raise HTTPException(404, "계정을 찾을 수 없습니다")
+        return {"message": "계정이 삭제되었습니다"}
+    finally:
+        db.close()
+
+
+@router.put("/sites/credentials/{cred_id}/toggle")
+def toggle_credential(cred_id: int):
+    db = _db()
+    try:
+        result = db.toggle_credential(cred_id)
+        if not result:
+            raise HTTPException(404, "계정을 찾을 수 없습니다")
+        state = "활성화" if result["is_active"] else "비활성화"
+        return {"is_active": result["is_active"], "message": f"계정이 {state}되었습니다"}
+    finally:
+        db.close()
+
+
 # ─── 수집 주기 설정 ──────────────────────────────────────────
 
 class ScheduleBody(BaseModel):
@@ -310,9 +386,10 @@ def _cleanup_finished(pid: int):
 def run_crawl(body: dict):
     """크롤링 실행 (개별/다건)
 
-    body: { "site_ids": [1,2,3] }
+    body: { "site_ids": [1,2,3], "use_proxy": false }
     """
     site_ids = body.get("site_ids", [])
+    use_proxy = body.get("use_proxy", False)
     if not site_ids:
         raise HTTPException(400, "site_ids가 필요합니다")
 
@@ -346,8 +423,11 @@ def run_crawl(body: dict):
                 log_path = os.path.join(_LOGS_DIR, log_filename)
                 log_file = open(log_path, "w", encoding="utf-8", buffering=1)  # line-buffered
                 env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+                cmd = [_PYTHON, "-u", "main.py", "run", "--id", str(sid)]
+                if use_proxy:
+                    cmd.append("--proxy")
                 proc = subprocess.Popen(
-                    [_PYTHON, "-u", "main.py", "run", "--id", str(sid)],
+                    cmd,
                     cwd=os.path.abspath(_ROOT),
                     stdout=log_file,
                     stderr=subprocess.STDOUT,

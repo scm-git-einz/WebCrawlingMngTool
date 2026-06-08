@@ -60,6 +60,8 @@ class DirectoryAgent(BaseAgent):
         cfg.setdefault("collect_details", False)
         cfg.setdefault("index_navigation", False)
         cfg.setdefault("extra_fields", [])
+        cfg.setdefault("categories", [])
+        cfg.setdefault("load_all_pages", True)
 
         if cfg.pop("item_limit_type", None) == "all":
             cfg["max_items"] = 0
@@ -91,7 +93,7 @@ class DirectoryAgent(BaseAgent):
         try:
             cookie_domain = self._get_cookie_domain(url)
             interceptor = NetworkInterceptor()
-            self.page = self.browser_mgr.create(cookie_domain=cookie_domain)
+            self.page = self._create_page(cookie_domain=cookie_domain)
             interceptor.start(self.page)
 
             resp = self._safe_goto(url)
@@ -106,7 +108,9 @@ class DirectoryAgent(BaseAgent):
             _log(f"네트워크 요청 {len(captured)}건 캡처")
 
             # 목록 수집
-            if cfg.get("index_navigation"):
+            if cfg.get("list_type") == "brand_branch":
+                items = self._collect_brand_branch(cfg)
+            elif cfg.get("index_navigation"):
                 items = self._collect_by_index(cfg, captured)
             else:
                 items = self._collect_single_page(cfg, captured)
@@ -147,6 +151,94 @@ class DirectoryAgent(BaseAgent):
         finally:
             self.browser_mgr.close()
             self.page = None
+
+    # ══════════════════════════════════════════════════════════════
+    # 수집 방법 0: 브랜드 지점 (카테고리 탭 + 지점별 더보기)
+    # ══════════════════════════════════════════════════════════════
+
+    def _collect_brand_branch(self, cfg: dict) -> list:
+        """카테고리별 브랜드 지점 정보를 수집한다.
+
+        면세점 브랜드 매장 페이지(dl/dt/dd 구조)에서
+        브랜드명, 지점, 위치(층), 카테고리, 전화번호를 추출.
+        """
+        all_items = []
+        seen = set()
+        categories = cfg.get("categories", [])
+        load_all = cfg.get("load_all_pages", True)
+
+        # 카테고리 탭 탐지
+        cat_tabs = self.page.evaluate(_JS_DETECT_CATEGORY_TABS)
+        if cat_tabs:
+            _log(f"카테고리 탭 {len(cat_tabs)}개 탐지: "
+                 + ", ".join(t.get("text", "") for t in cat_tabs[:5]) + "...")
+        else:
+            _log("카테고리 탭 없음 → 현재 페이지에서 직접 추출")
+
+        # 수집 대상 카테고리 결정
+        if categories:
+            targets = [{"code": c, "text": c} for c in categories]
+        elif cat_tabs:
+            targets = [{"code": "0", "text": "전체"}]
+        else:
+            targets = [{"code": None, "text": "현재페이지"}]
+
+        for ti, target in enumerate(targets):
+            code = target["code"]
+            label = target["text"]
+            _log(f"카테고리 [{label}] ({ti+1}/{len(targets)})")
+
+            if code is not None and cat_tabs:
+                try:
+                    self.page.evaluate(
+                        "(cd) => { if(typeof catChange==='function') catChange(cd, null); }",
+                        code
+                    )
+                    self.page.wait_for_timeout(4000)
+                except Exception as e:
+                    _log(f"  카테고리 전환 실패: {e}")
+                    continue
+
+            # 더보기 전체 로드
+            if load_all:
+                self._load_all_more(cfg)
+
+            # 브랜드 항목 추출
+            items = self.page.evaluate(_JS_EXTRACT_BRAND_BRANCH)
+            if not items:
+                # fallback: 범용 dl/dd 추출
+                items = self.page.evaluate(_JS_EXTRACT_BRAND_BRANCH_FALLBACK)
+
+            added = 0
+            for item in (items or []):
+                name = (item.get("name") or "").strip()
+                branch = (item.get("branch") or "").strip()
+                location = (item.get("location") or "").strip()
+                key = f"{name}|{branch}|{location}"
+                if name and key not in seen:
+                    seen.add(key)
+                    all_items.append(item)
+                    added += 1
+
+            _log(f"  +{added}개 (총 {len(all_items)})")
+            if ti < len(targets) - 1:
+                self._delay()
+
+        return all_items
+
+    def _load_all_more(self, cfg: dict):
+        """모든 지점의 '더보기'를 클릭하여 전체 데이터를 로드한다."""
+        max_rounds = 200
+        for _ in range(max_rounds):
+            result = self.page.evaluate(_JS_CLICK_NEXT_MORE)
+            if not result or result.get("done"):
+                break
+            branch = result.get("branch", "")
+            loaded = result.get("loaded", 0)
+            total = result.get("total", 0)
+            _log(f"  더보기: {branch} ({loaded}/{total})")
+            self.page.wait_for_timeout(2000)
+            self._delay()
 
     # ══════════════════════════════════════════════════════════════
     # 수집 방법 1: 인덱스 순회 (A~Z, ㄱ~ㅎ)
@@ -335,7 +427,8 @@ class DirectoryAgent(BaseAgent):
             if std_key:
                 keep.add(std_key)
         # 항상 유지할 메타 필드
-        keep.update(["collected_at", "brand_initial", "detail_url", "image_url"])
+        keep.update(["collected_at", "brand_initial", "detail_url", "image_url",
+                      "location", "phone", "branch"])
 
         result = []
         for item in items:
@@ -377,6 +470,167 @@ class DirectoryAgent(BaseAgent):
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
         _log(f"파일 저장: {output_dir}")
+
+
+# ══════════════════════════════════════════════════════════════════
+# JS: 카테고리 탭 탐지 (브랜드 지점)
+# ══════════════════════════════════════════════════════════════════
+
+_JS_DETECT_CATEGORY_TABS = """(() => {
+    var tabs = [];
+    var sels = [
+        'ul.branch_link > li > a',
+        '[class*="cate_tab"] a', '[class*="cateTab"] a',
+        '[class*="filter"] li a', '[class*="tab_menu"] a'
+    ];
+    for (var i = 0; i < sels.length; i++) {
+        var els = document.querySelectorAll(sels[i]);
+        if (els.length < 3) continue;
+        for (var j = 0; j < els.length; j++) {
+            var el = els[j];
+            var text = el.textContent.trim();
+            if (!text || text.length > 20) continue;
+            var onclick = el.getAttribute('onclick') || '';
+            var m = onclick.match(/catChange\\s*\\(\\s*['\"]?([^'\"\\),]+)/);
+            var code = m ? m[1] : String(j);
+            tabs.push({ text: text, code: code });
+        }
+        if (tabs.length >= 3) return tabs;
+    }
+    return null;
+})()"""
+
+
+# ══════════════════════════════════════════════════════════════════
+# JS: 브랜드 지점 dl/dt/dd 추출
+# ══════════════════════════════════════════════════════════════════
+
+_JS_EXTRACT_BRAND_BRANCH = """(() => {
+    var container = document.getElementById('brchBrndInfo');
+    if (!container) return null;
+    var wraps = container.querySelectorAll('.search_wrap');
+    if (wraps.length === 0) return null;
+    var items = [];
+    wraps.forEach(function(wrap) {
+        var branch = '';
+        var h4 = wrap.querySelector('h4');
+        if (h4) branch = h4.textContent.trim();
+        wrap.querySelectorAll('dl').forEach(function(dl) {
+            var dt = dl.querySelector('dt');
+            var name = dt ? dt.textContent.trim() : '';
+            var lis = dl.querySelectorAll('dd > ul > li');
+            var location = lis.length > 0 ? lis[0].textContent.trim() : '';
+            var category = lis.length > 1 ? lis[1].textContent.trim() : '';
+            var telDd = dl.querySelector('dd.tel');
+            var phone = telDd ? telDd.textContent.trim() : '';
+            if (name) {
+                items.push({
+                    name: name.substring(0, 200),
+                    branch: branch,
+                    location: location,
+                    category: category,
+                    phone: phone
+                });
+            }
+        });
+    });
+    return items.length > 0 ? items : null;
+})()"""
+
+
+_JS_EXTRACT_BRAND_BRANCH_FALLBACK = """(() => {
+    /* 범용 fallback: table 또는 반복 구조에서 브랜드 정보 추출 */
+    var items = [];
+    /* table 방식 */
+    var rows = document.querySelectorAll('table tbody tr');
+    if (rows.length >= 2) {
+        rows.forEach(function(tr) {
+            var tds = tr.querySelectorAll('td');
+            if (tds.length >= 2) {
+                var name = tds[0].textContent.trim();
+                var location = tds.length > 1 ? tds[1].textContent.trim() : '';
+                var category = tds.length > 2 ? tds[2].textContent.trim() : '';
+                var phone = '';
+                for (var i = 0; i < tds.length; i++) {
+                    var t = tds[i].textContent.trim();
+                    if (/\\d{2,4}-\\d{3,4}-\\d{4}/.test(t) || /^\\+\\d/.test(t)) {
+                        phone = t; break;
+                    }
+                }
+                if (name && name.length < 200) {
+                    items.push({ name: name, branch: '', location: location,
+                                 category: category, phone: phone });
+                }
+            }
+        });
+        if (items.length >= 2) return items;
+    }
+    /* dl/dd 방식 (컨테이너 ID 없는 경우) */
+    var dls = document.querySelectorAll('dl');
+    if (dls.length >= 3) {
+        dls.forEach(function(dl) {
+            var dt = dl.querySelector('dt');
+            var name = dt ? dt.textContent.trim() : '';
+            var dds = dl.querySelectorAll('dd');
+            var location = '', category = '', phone = '';
+            dds.forEach(function(dd) {
+                var t = dd.textContent.trim();
+                if (dd.classList.contains('tel') || /\\d{2,4}-\\d{3,4}-\\d{4}/.test(t) || /^\\+\\d/.test(t)) {
+                    phone = t;
+                } else {
+                    var lis = dd.querySelectorAll('li');
+                    if (lis.length > 0) location = lis[0].textContent.trim();
+                    if (lis.length > 1) category = lis[1].textContent.trim();
+                }
+            });
+            if (name && name.length < 200) {
+                items.push({ name: name, branch: '', location: location,
+                             category: category, phone: phone });
+            }
+        });
+        if (items.length >= 2) return items;
+    }
+    return items.length > 0 ? items : null;
+})()"""
+
+
+# ══════════════════════════════════════════════════════════════════
+# JS: 더보기 버튼 클릭 (지점별)
+# ══════════════════════════════════════════════════════════════════
+
+_JS_CLICK_NEXT_MORE = """(() => {
+    /* 아직 더보기가 남은 지점을 찾아서 클릭 */
+    var wraps = document.querySelectorAll('#brchBrndInfo .search_wrap, .branch_search .search_wrap');
+    for (var i = 0; i < wraps.length; i++) {
+        var wrap = wraps[i];
+        /* 지점 코드와 total count 파악 */
+        var totInput = wrap.querySelector('input[id^="brchTotCnt_"]');
+        var pageInput = wrap.querySelector('input[id^="curPageNo_"]');
+        if (!totInput || !pageInput) continue;
+        var brchCd = totInput.id.replace('brchTotCnt_', '');
+        var total = parseInt(totInput.value) || 0;
+        var curPage = parseInt(pageInput.value) || 1;
+        var loaded = (curPage - 1) * 30;
+        if (loaded >= total) continue;
+        /* 해당 지점의 더보기 버튼 클릭 */
+        var moreBtn = document.getElementById('btnBrndMore_' + brchCd);
+        if (moreBtn) {
+            var a = moreBtn.querySelector('a');
+            if (a) a.click();
+            else moreBtn.click();
+        } else if (typeof moreEvent === 'function') {
+            moreEvent(brchCd);
+        }
+        var h4 = wrap.querySelector('h4');
+        return {
+            done: false,
+            branch: h4 ? h4.textContent.trim() : brchCd,
+            loaded: loaded,
+            total: total
+        };
+    }
+    return { done: true };
+})()"""
 
 
 # ══════════════════════════════════════════════════════════════════

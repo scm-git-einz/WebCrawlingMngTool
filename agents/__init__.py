@@ -8,6 +8,7 @@
   - promotion: 프로모션/이벤트 수집 에이전트
   - banner:    배너/비주얼 수집 에이전트 (v2)
   - directory: 브랜드/이벤트 목록 수집 에이전트 (v2)
+  - order:     주문서 결제정보 수집 에이전트
 
 에이전트 레지스트리:
   AGENT_REGISTRY 에 등록된 에이전트만 main.py 에서 사용 가능하다.
@@ -18,6 +19,7 @@ from agents.cafe.engine import CafeAgent
 from agents.promotion.engine import PromotionAgent
 from agents.banner.engine import BannerAgent
 from agents.directory.engine import DirectoryAgent
+from agents.order.engine import OrderAgent
 
 
 AGENT_REGISTRY = {
@@ -27,6 +29,7 @@ AGENT_REGISTRY = {
     "promotion": PromotionAgent,
     "banner": BannerAgent,
     "directory": DirectoryAgent,
+    "order": OrderAgent,
 }
 
 
