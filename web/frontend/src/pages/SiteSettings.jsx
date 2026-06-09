@@ -1488,19 +1488,30 @@ function NewsConfig({ site, onSaved, showConfirm, closeConfirm }) {
   const [saving, setSaving] = useState(false)
 
   const addKeyword = () => {
-    const kw = newKw.trim()
-    if (!kw) return
+    const parts = newKw
+      .split(/[,\n]/)
+      .map(s => s.trim())
+      .filter(Boolean)
+    if (parts.length === 0) return
+    const existing = new Set(keywords.map(k => k.keyword))
+    const fresh = Array.from(new Set(parts)).filter(k => !existing.has(k))
+    if (fresh.length === 0) { setNewKw(''); return }
+    const label = fresh.length === 1
+      ? `"${fresh[0]}" 키워드를 추가하시겠습니까?`
+      : `${fresh.length}개 키워드를 추가하시겠습니까?\n${fresh.join(', ')}`
     showConfirm({
       title: '키워드 추가',
-      message: `"${kw}" 키워드를 추가하시겠습니까?`,
+      message: label,
       confirmLabel: '추가',
       onConfirm: async () => {
         closeConfirm()
-        await fetch(`/api/sites/${site.id}/keywords`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ keyword: kw }),
-        })
+        for (const kw of fresh) {
+          await fetch(`/api/sites/${site.id}/keywords`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ keyword: kw }),
+          })
+        }
         setNewKw('')
         const res = await fetch(`/api/sites/${site.id}/keywords`)
         setKeywords(await res.json())

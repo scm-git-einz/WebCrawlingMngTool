@@ -429,6 +429,7 @@ def run_crawl(body: dict):
                 proc = subprocess.Popen(
                     cmd,
                     cwd=os.path.abspath(_ROOT),
+                    stdin=subprocess.DEVNULL,
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
                     env=env,

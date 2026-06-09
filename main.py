@@ -201,14 +201,7 @@ def cmd_run(args):
                 agent.enable_proxy()
 
             if agent_type == "news":
-                # --keywords 가 없으면 대화형 프롬프트
-                if not override_keywords:
-                    prompted = _prompt_news_keywords(db, site)
-                    if prompted is not None:
-                        if len(prompted) == 0:
-                            return  # 사용자 취소
-                        override_keywords = prompted
-
+                # DB 등록 키워드를 기본 사용. --keywords 가 있을 때만 override.
                 if override_keywords:
                     agent.run_site(args.id, override_keywords=override_keywords)
                 else:
