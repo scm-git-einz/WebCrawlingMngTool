@@ -1,177 +1,146 @@
 """
 주문서 결제정보 수집 에이전트
 
-장바구니 상품을 한 건씩 선택 → 주문서 이동 → 결제정보 수집 → 장바구니 복귀
-를 반복하여 상품별 최종결제금액을 수집한다.
+상품 코드별로 상품상세 페이지 → 구매/주문 버튼 클릭 → 주문서 페이지 이동
+을 반복하여 상품별 최종결제금액을 수집한다.
+
+수집 필드 (상품 1건 기준):
+  - product_code  : 상품코드 (입력값)
+  - product_name  : 상품명 (주문서)
+  - payment_usd   : 최종결제금액 (달러)
+  - payment_krw   : 최종결제금액 (원화)
+  - discount_rate : 할인율 (예: "50%")
 
 파이프라인:
   1. 브라우저 시작 (Stealth + 쿠키 로드)
   2. 로그인 페이지 접속 → 로그인 (계정 로테이션)
-  3. 장바구니 페이지 접속 → 상품 목록 파악
-  4. 상품별 반복:
-     a. 전체 해제 → 해당 상품만 선택
-     b. 주문하기 클릭 → 주문서 페이지 이동
-     c. 결제정보 추출 (할인율/결제금액($)/결제금액(원))
-     d. 장바구니 페이지 복귀
-  5. 전체 결과 JSON 저장
+  3. 상품 코드 목록(product_codes) 순회:
+     a. 상품상세 URL 이동 (product_detail_url_template + prdNo)
+     b. 구매하기/주문하기 버튼 클릭 → 주문서 페이지 이동
+     c. 주문서에서 상품명 + 최종결제금액(USD/KRW/할인율) 추출
+  4. 전체 결과 JSON 저장
 
 봇 차단 대응:
   - BaseAgent 상속 (Stealth 브라우저, 적응형 백오프, 인간형 행동)
   - _safe_goto → _is_blocked → _human_dwell → _human_scroll 패턴 준수
   - 페이지 이동 간 _delay() 적용
 
-대상: 롯데면세점, 신라면세점, 현대면세점 등 로그인 기반 주문 페이지
+대상: 롯데면세점 등 로그인 기반 면세점 주문 페이지
 """
 import json
 import os
-import random
 import time
 from datetime import datetime
 
 from core.base_agent import BaseAgent, DEFAULT_SETTINGS
-from core.network_interceptor import NetworkInterceptor
 
 
 _TAG = "[order]"
 
-# ─── 장바구니 상품 목록 추출 ────────────────────────────────────
-_JS_GET_CART_ITEMS = """() => {
-    const items = [];
-    const itemSelectors = [
-        '.cart_prd_list > li', '.cart-product-list > li',
-        '.order_prd_list > li', '.order-product-list > li',
-        '[class*="cartItem"]', '[class*="cart_item"]',
-        '[class*="cart"] [class*="prd_item"]',
-        '[class*="cart"] [class*="goods_item"]',
-        'table[class*="cart"] tbody tr',
-        '.cart_cont li', '.cart_list li',
+# ─── 바로구매 팝업 내부의 최종 "주문" 버튼 클릭 ────────────────
+# cartPopup('cartForm', '2') 호출 시 모달이 열리고, 그 안에서 수량/옵션 확인 후
+# "주문하기" / "구매하기" / "확인" 등의 최종 버튼을 한 번 더 눌러야 newOrder로 이동.
+_JS_CLICK_POPUP_CONFIRM = """() => {
+    function isVisible(el) {
+        if (!el) return false;
+        if (el.offsetParent === null) return false;
+        const r = el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) return false;
+        const s = getComputedStyle(el);
+        return s.visibility !== 'hidden' && s.display !== 'none';
+    }
+
+    // 팝업/모달 컨테이너 후보 (보이는 것만)
+    const popupSelectors = [
+        '.popup_wrap', '.popupWrap', '.layer_popup', '.layerPopup',
+        '.modal', '.modal_wrap', '.modalWrap', '.dim_popup',
+        '[class*="popup"]', '[class*="modal"]', '[class*="layer"]',
+        '[role="dialog"]',
     ];
-
-    let container = null;
-    let els = [];
-    for (const sel of itemSelectors) {
-        els = [...document.querySelectorAll(sel)];
-        if (els.length > 0) { container = sel; break; }
+    let popup = null;
+    for (const sel of popupSelectors) {
+        const candidates = [...document.querySelectorAll(sel)];
+        const visible = candidates.find(isVisible);
+        if (visible) { popup = visible; break; }
     }
-    if (els.length === 0) return { items: [], selector: '', error: 'cart items not found' };
+    if (!popup) return { ok: false, error: 'popup not visible' };
 
-    for (let idx = 0; idx < els.length; idx++) {
-        const el = els[idx];
-        const text = (el.textContent || '').trim();
-        if (text.length < 5) continue;
-
-        // 체크박스
-        const checkbox = el.querySelector(
-            'input[type="checkbox"], [class*="check"] input, [role="checkbox"]'
-        );
-
-        // 상품명
-        let name = '';
-        const nameEl = el.querySelector(
-            '[class*="prd_name"], [class*="prdName"], [class*="goods_name"], ' +
-            '[class*="goodsNm"], [class*="product_name"], [class*="productName"], ' +
-            '[class*="item_name"], [class*="itemName"], .name, .tit, .title'
-        );
-        if (nameEl) {
-            name = nameEl.textContent.trim();
-        } else {
-            const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-            let longest = '';
-            while (walker.nextNode()) {
-                const t = walker.currentNode.textContent.trim();
-                if (t.length > longest.length && t.length > 5) longest = t;
-            }
-            name = longest;
-        }
-        if (!name) continue;
-
-        // 수량
-        let qty = '1';
-        const qtyEl = el.querySelector(
-            'input[name*="qty"], input[name*="count"], input[class*="qty"], ' +
-            '[class*="qty"] input, [class*="count"]'
-        );
-        if (qtyEl) qty = qtyEl.value || qtyEl.textContent.trim() || '1';
-        const qtyMatch = text.match(/(\\d+)\\s*개/);
-        if (qtyMatch && qty === '1') qty = qtyMatch[1];
-
-        // 가격
-        const prices = [];
-        const priceRegex = /\\$[\\d,.]+|[\\d,]+원/g;
-        let m;
-        while ((m = priceRegex.exec(text)) !== null) prices.push(m[0]);
-
-        // 브랜드
-        let brand = '';
-        const brandEl = el.querySelector('[class*="brand"], [class*="cate"]');
-        if (brandEl) brand = brandEl.textContent.trim();
-
-        // 이미지
-        const img = el.querySelector('img');
-        const imageUrl = img ? (img.src || img.getAttribute('data-src') || '') : '';
-
-        items.push({
-            index: idx,
-            name: name.substring(0, 200),
-            brand,
-            qty,
-            prices,
-            image_url: imageUrl,
-            has_checkbox: !!checkbox,
-            checkbox_checked: checkbox ? checkbox.checked : false,
-        });
-    }
-
-    return { items, selector: container };
-}"""
-
-# ─── 장바구니: 전체 해제 → N번째만 선택 ─────────────────────────
-_JS_SELECT_SINGLE_ITEM = """(containerSel, targetIdx) => {
-    const els = [...document.querySelectorAll(containerSel)];
-    if (els.length === 0) return { ok: false, error: 'no items' };
-
-    // 1) 전체선택 체크박스 해제
-    const selectAllCb = document.querySelector(
-        '[class*="all"] input[type="checkbox"], ' +
-        'input[id*="checkAll"], input[name*="checkAll"], ' +
-        '[class*="selectAll"] input, [class*="allCheck"] input'
-    );
-    if (selectAllCb && selectAllCb.checked) selectAllCb.click();
-
-    // 2) 개별 해제
-    const allCheckboxes = [];
-    els.forEach(el => {
-        const cb = el.querySelector('input[type="checkbox"], [role="checkbox"]');
-        if (cb) allCheckboxes.push(cb);
+    // 팝업 내부에서 주문/구매/확인 버튼 탐색
+    const btns = [...popup.querySelectorAll(
+        'button, a, a[role="button"], input[type="button"], input[type="submit"]'
+    )];
+    const confirm = btns.find(b => {
+        if (!isVisible(b)) return false;
+        const t = (b.textContent || b.value || '').replace(/\\s+/g, '').trim();
+        // 취소/닫기/장바구니는 제외
+        if (/취소|닫기|장바구니|계속쇼핑|cancel|close/i.test(t)) return false;
+        return /^(주문하기|주문|구매하기|구매|결제하기|결제|바로구매|확인|OK)$/i.test(t);
     });
-    allCheckboxes.forEach(cb => { if (cb.checked) cb.click(); });
-
-    // 3) 대상 항목만 선택
-    if (targetIdx >= els.length) return { ok: false, error: 'index out of range' };
-    const targetEl = els[targetIdx];
-    const targetCb = targetEl.querySelector('input[type="checkbox"], [role="checkbox"]');
-    if (!targetCb) return { ok: false, error: 'no checkbox at target' };
-    if (!targetCb.checked) targetCb.click();
-
-    return {
-        ok: true,
-        checked_count: allCheckboxes.filter(cb => cb.checked).length,
-        target_checked: targetCb.checked,
-    };
+    if (!confirm) {
+        // 팝업 내부 버튼 텍스트 디버그
+        const labels = btns
+            .filter(isVisible)
+            .map(b => (b.textContent || b.value || '').replace(/\\s+/g, ' ').trim())
+            .filter(t => t.length > 0 && t.length < 30);
+        return { ok: false, error: 'popup confirm not found', popup_buttons: labels };
+    }
+    const text = (confirm.textContent || confirm.value || '').replace(/\\s+/g, ' ').trim();
+    confirm.click();
+    return { ok: true, text };
 }"""
 
 # ─── 주문하기 버튼 클릭 ──────────────────────────────────────
+# 롯데면세점 상품상세 "바로 구매" 버튼:
+#   <a href="javascript:cartPopup('cartForm', '2');"
+#      class="btn_type4 col1 gaEvtTg"
+#      data-gaevtaction="바로구매" data-gaevtlabel="바로구매">바로 구매</a>
+# → 2번째 파라미터 '2'가 바로구매 모드 (cartPopup(form, mode))
 _JS_CLICK_ORDER_BUTTON = """() => {
-    // 텍스트 기반 탐색
-    const allBtns = [...document.querySelectorAll('button, a[role="button"], input[type="button"], a.btn')];
-    const textBtn = allBtns.find(b => {
-        const t = b.textContent.trim();
-        return /^(주문하기|주문|구매하기|결제하기|바로구매|ORDER)$/i.test(t);
-    });
-    if (textBtn) { textBtn.click(); return { ok: true, method: 'text', text: textBtn.textContent.trim() }; }
+    function isVisible(el) {
+        if (!el) return false;
+        if (el.offsetParent === null) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+    }
+    function clickAndReport(el, method, extra) {
+        const text = (el.textContent || '').replace(/\\s+/g, ' ').trim();
+        el.click();
+        return { ok: true, method, text, ...(extra || {}) };
+    }
 
-    // 셀렉터 기반 탐색
+    // ── 1) GA 데이터 속성 우선 (가장 정확) ──
+    const gaSelectors = [
+        'a[data-gaevtaction="바로구매"]',
+        'a[data-gaevtlabel="바로구매"]',
+        'button[data-gaevtaction="바로구매"]',
+    ];
+    for (const sel of gaSelectors) {
+        const el = document.querySelector(sel);
+        if (isVisible(el)) return clickAndReport(el, 'ga-attr', { selector: sel });
+    }
+
+    // ── 2) cartPopup(..., '2') href (바로구매 모드) ──
+    const popupBtns = [...document.querySelectorAll('a[href*="cartPopup"]')];
+    const buyNow = popupBtns.find(a => {
+        const h = a.getAttribute('href') || '';
+        return /cartPopup\\([^)]*,\\s*['"]2['"]/.test(h) && isVisible(a);
+    });
+    if (buyNow) return clickAndReport(buyNow, 'cartPopup-href');
+
+    // ── 3) 텍스트 매칭 ("바로 구매" 공백 포함 / "바로구매" 모두 허용) ──
+    const allBtns = [...document.querySelectorAll(
+        'button, a, a[role="button"], input[type="button"]'
+    )];
+    const textBtn = allBtns.find(b => {
+        if (!isVisible(b)) return false;
+        const t = (b.textContent || '').replace(/\\s+/g, '').trim();
+        return /^(바로구매|주문하기|주문|구매하기|결제하기|ORDER)$/i.test(t);
+    });
+    if (textBtn) return clickAndReport(textBtn, 'text');
+
+    // ── 4) 클래스 기반 폴백 ──
     const candidates = [
+        '[class*="btn_buy_now"], [class*="btnBuyNow"]',
         'button[class*="order"], a[class*="order"]',
         'button[class*="buy"], a[class*="buy"]',
         '[class*="btn_order"], [class*="btnOrder"]',
@@ -179,11 +148,10 @@ _JS_CLICK_ORDER_BUTTON = """() => {
     ];
     for (const sel of candidates) {
         const el = document.querySelector(sel);
-        if (el && el.offsetParent !== null) {
-            const t = el.textContent.trim();
-            if (t && !/삭제|취소|닫기/i.test(t)) {
-                el.click();
-                return { ok: true, method: 'selector', selector: sel, text: t };
+        if (isVisible(el)) {
+            const t = (el.textContent || '').trim();
+            if (t && !/삭제|취소|닫기|장바구니/.test(t)) {
+                return clickAndReport(el, 'class-selector', { selector: sel });
             }
         }
     }
@@ -191,131 +159,156 @@ _JS_CLICK_ORDER_BUTTON = """() => {
 }"""
 
 # ─── 주문서 결제정보 추출 ──────────────────────────────────────
+# 수집 필드 (4건):
+#   - product_name : 상품명
+#   - payment_usd  : 최종 결제금액 (달러)
+#   - payment_krw  : 최종 결제금액 (원화)
+#   - discount_rate: 할인율 (예: "50%")
+# (상품코드는 호출 측에서 전달한 prd_no를 사용)
 _JS_EXTRACT_ORDER_PAYMENT = """() => {
-    const summary = {};
+    const result = {
+        product_name: '',
+        payment_usd: '',
+        payment_krw: '',
+        discount_rate: '',
+    };
     const raw_texts = [];
 
+    const FINAL_LABELS = [
+        '최종결제금액', '총 결제금액', '결제금액', '결제 금액',
+        '총합계', '합계금액', '합계 금액', '총 합계',
+    ];
+
+    function matchFinal(text) {
+        const clean = (text || '').replace(/\\s+/g, ' ').trim();
+        return FINAL_LABELS.some(l => clean.includes(l));
+    }
+    function pickUsd(text) {
+        const m = (text || '').match(/-?\\$[\\d,.]+/);
+        return m ? m[0] : '';
+    }
+    function pickKrw(text) {
+        const m = (text || '').match(/\\(?(-?[\\d,]+)원\\)?/);
+        return m ? m[1] + '원' : '';
+    }
+    function pickRate(text) {
+        const m = (text || '').match(/(\\d+)\\s*%/);
+        return m ? m[0].replace(/\\s+/g, '') : '';
+    }
+    function setIfEmpty(key, val) {
+        if (val && !result[key]) result[key] = val;
+    }
+
     // ═══════════════════════════════════════════════════════
-    // 1단계: 면세점 특화 — dl.expected_payment
-    //   <dl class="expected_payment">
-    //     <dt>결제금액</dt>
-    //     <dd class="price">
-    //       <p><span>50%</span><strong>$251.49</strong></p>
-    //       (380,076원)
-    //     </dd>
-    //   </dl>
+    // 1) 면세점 신주문서 — dl.expected_payment
+    //    <dl class="expected_payment">
+    //      <dt>결제금액</dt>
+    //      <dd class="price">
+    //        <p><span>50%</span><strong>$251.49</strong></p>
+    //        (380,076원)
+    //      </dd>
+    //    </dl>
     // ═══════════════════════════════════════════════════════
     const expectedDl = document.querySelector(
         'dl.expected_payment, dl[class*="expected"], dl[class*="payment_total"]'
     );
     if (expectedDl) {
-        const dd = expectedDl.querySelector('dd, dd.price');
+        const dd = expectedDl.querySelector('dd');
         if (dd) {
             const rateEl = dd.querySelector('p > span, span[class*="rate"], span[class*="percent"]');
-            if (rateEl) {
-                const rateMatch = rateEl.textContent.trim().match(/(\\d+)%/);
-                if (rateMatch) summary.discount_rate = rateMatch[0];
-            }
+            if (rateEl) setIfEmpty('discount_rate', pickRate(rateEl.textContent));
             const usdEl = dd.querySelector('strong, p > strong');
-            if (usdEl) {
-                const usdMatch = usdEl.textContent.trim().match(/\\$[\\d,.]+/);
-                if (usdMatch) summary.payment_usd = usdMatch[0];
-            }
-            const ddText = dd.textContent || '';
-            const krwMatch = ddText.match(/\\(?([\\d,]+)원\\)?/);
-            if (krwMatch) summary.payment_krw = krwMatch[1] + '원';
+            if (usdEl) setIfEmpty('payment_usd', pickUsd(usdEl.textContent));
+            setIfEmpty('payment_krw', pickKrw(dd.textContent));
         }
     }
 
     // ═══════════════════════════════════════════════════════
-    // 2단계: 결제정보 전체 dl/dt-dd 라벨-값 탐색
+    // 2) dl/dt-dd 라벨 매칭 (결제금액 라벨만)
     // ═══════════════════════════════════════════════════════
-    const LABEL_MAP = {
-        '정상가': 'regular_price', '상품금액': 'regular_price', '총 상품금액': 'regular_price',
-        '회원할인': 'member_discount', '회원 할인': 'member_discount',
-        '즉시할인': 'instant_discount',
-        '혜택': 'benefits', '할인혜택': 'benefits',
-        '쿠폰할인': 'coupon_discount',
-        '결제금액': 'payment_amount', '결제 금액': 'payment_amount',
-        '최종결제금액': 'final_payment', '총 결제금액': 'final_payment',
-        '면세한도적용금액': 'duty_free_limit', '면세한도 적용금액': 'duty_free_limit',
-        '과세 포인트': 'tax_point', '과세포인트': 'tax_point',
-        '적립': 'reward_points', '적립 L.POINT': 'reward_points', 'L.POINT': 'reward_points',
-        '배송비': 'shipping_fee',
-    };
-
-    function extractPriceText(el) {
-        if (!el) return '';
-        return el.textContent.trim().replace(/\\s+/g, ' ').substring(0, 100);
-    }
-    function matchLabel(text) {
-        const clean = text.replace(/\\s+/g, ' ').trim();
-        for (const [kor, eng] of Object.entries(LABEL_MAP)) {
-            if (clean.includes(kor)) return eng;
-        }
-        return null;
-    }
-
     document.querySelectorAll('dl').forEach(dl => {
         const dts = dl.querySelectorAll('dt');
         const dds = dl.querySelectorAll('dd');
         dts.forEach((dt, i) => {
-            const key = matchLabel(dt.textContent);
-            if (key && dds[i] && !summary[key]) {
-                const ddText = extractPriceText(dds[i]);
-                summary[key] = ddText;
-                const usdMatch = ddText.match(/\\$[\\d,.]+/);
-                const krwMatch = ddText.match(/([\\d,]+)원/);
-                if (key === 'regular_price') {
-                    if (usdMatch) summary.regular_price_usd = usdMatch[0];
-                    if (krwMatch) summary.regular_price_krw = krwMatch[1] + '원';
-                } else if (key === 'member_discount') {
-                    if (usdMatch) summary.member_discount_usd = usdMatch[0];
-                    if (krwMatch) summary.member_discount_krw = krwMatch[1] + '원';
-                } else if (key === 'benefits') {
-                    if (usdMatch) summary.benefits_usd = usdMatch[0];
-                    if (krwMatch) summary.benefits_krw = krwMatch[1] + '원';
-                }
-            }
+            if (!matchFinal(dt.textContent) || !dds[i]) return;
+            const ddText = dds[i].textContent || '';
+            setIfEmpty('payment_usd', pickUsd(ddText));
+            setIfEmpty('payment_krw', pickKrw(ddText));
+            setIfEmpty('discount_rate', pickRate(ddText));
         });
     });
 
-    // table th-td
-    document.querySelectorAll('table tr').forEach(tr => {
-        const th = tr.querySelector('th, .tit, .label');
-        const td = tr.querySelector('td, .data, .value');
-        if (th && td) {
-            const key = matchLabel(th.textContent);
-            if (key && !summary[key]) summary[key] = extractPriceText(td);
+    // ═══════════════════════════════════════════════════════
+    // 3) .tit + .price 페어 (롯데 신주문서 .totalPayment)
+    //    <li><div class="tit">결제금액</div>
+    //        <div class="price"><strong>$251.49</strong><span>(380,076원)</span></div>
+    //    </li>
+    // ═══════════════════════════════════════════════════════
+    const payScope = document.querySelector(
+        '.totalPayment, [class*="totalPayment"], [class*="payment_info"]'
+    ) || document;
+    function cleanTit(el) {
+        const c = el.cloneNode(true);
+        c.querySelectorAll(
+            '.tooltipWrap, .ux_arrow, .btnTip, .contTip, .btnClose, i, em, script'
+        ).forEach(n => n.remove());
+        return c.textContent.trim().replace(/\\s+/g, ' ');
+    }
+    payScope.querySelectorAll('.tit').forEach(titEl => {
+        if (!matchFinal(cleanTit(titEl))) return;
+        let priceEl = titEl.nextElementSibling;
+        if (!priceEl || !priceEl.classList || !priceEl.classList.contains('price')) {
+            const parent = titEl.parentElement;
+            if (parent) priceEl = parent.querySelector(':scope > .price');
         }
+        if (!priceEl) return;
+        const priceText = priceEl.textContent.replace(/\\s+/g, ' ').trim();
+        setIfEmpty('payment_usd', pickUsd(priceText));
+        setIfEmpty('payment_krw', pickKrw(priceText));
+        setIfEmpty('discount_rate', pickRate(priceText));
     });
 
     // ═══════════════════════════════════════════════════════
-    // 3단계: 주문서 상품 정보 (1건)
+    // 4) 상품명 — 롯데면세점 주문서 구조
+    //    <div class="info">
+    //      <a href="javascript:void(0)">
+    //        <div class="brand"><strong>다이슨</strong> DYSON</div>
+    //        <div class="product">다이슨 에어랩 i.d.™ ...</div>
+    //      </a>
+    //    </div>
     // ═══════════════════════════════════════════════════════
-    let orderItem = {};
-    const nameEl = document.querySelector(
-        '[class*="prd_name"], [class*="prdName"], [class*="goods_name"], ' +
-        '[class*="productName"], [class*="item_name"], ' +
-        '.order_prd_list .name, .order_prd_list .tit'
-    );
-    if (nameEl) orderItem.name = nameEl.textContent.trim().substring(0, 200);
-    const brandEl = document.querySelector('[class*="brand"], [class*="cate"]');
-    if (brandEl) orderItem.brand = brandEl.textContent.trim();
-    const img = document.querySelector('.order_prd_list img, [class*="order"] [class*="prd"] img');
-    if (img) orderItem.image_url = img.src || '';
+    const nameCandidates = [
+        '.info > a > .product', '.info .product',  // 롯데면세점 신주문서
+        '[class*="prd_name"]', '[class*="prdName"]',
+        '[class*="goods_name"]', '[class*="productName"]',
+        '[class*="item_name"]',
+        '.order_prd_list .name', '.order_prd_list .tit',
+    ];
+    for (const sel of nameCandidates) {
+        const el = document.querySelector(sel);
+        if (!el) continue;
+        const txt = el.textContent.replace(/\\s+/g, ' ').trim();
+        if (txt) {
+            result.product_name = txt.substring(0, 200);
+            break;
+        }
+    }
 
-    // raw text (디버깅용)
-    const payAreas = document.querySelectorAll(
-        '[class*="pay"], [class*="settle"], [class*="expected"], ' +
-        '[class*="order_info"], [class*="total"], [class*="summary"]'
-    );
-    payAreas.forEach(area => {
-        const text = area.textContent.replace(/\\s+/g, ' ').trim().substring(0, 500);
-        if (text.length > 10) raw_texts.push(text);
-    });
+    // ═══════════════════════════════════════════════════════
+    // 디버그용 raw text (결제정보 누락 시 로그)
+    // ═══════════════════════════════════════════════════════
+    if (!result.payment_usd && !result.payment_krw) {
+        const payAreas = document.querySelectorAll(
+            '[class*="pay"], [class*="settle"], [class*="expected"], ' +
+            '[class*="total"], [class*="summary"]'
+        );
+        payAreas.forEach(area => {
+            const text = area.textContent.replace(/\\s+/g, ' ').trim().substring(0, 300);
+            if (text.length > 10) raw_texts.push(text);
+        });
+    }
 
-    return { payment_summary: summary, order_item: orderItem, raw_texts };
+    return { ...result, raw_texts };
 }"""
 
 
@@ -334,14 +327,230 @@ class OrderAgent(BaseAgent):
         return "order"
 
     def _normalize_config(self, crawl_cfg: dict) -> dict:
-        """UI crawl_config → Agent 내부 config 변환."""
+        """UI crawl_config → Agent 내부 config 변환.
+
+        Fields:
+          - login_url: 로그인 페이지 URL
+          - product_codes: list[str] — 수집 대상 상품 코드 목록 (멀티 등록)
+          - product_detail_url_template: '{prdNo}' 플레이스홀더 포함 URL
+          - order_url: 주문서 URL (구매 클릭 후 도달할 URL 패턴)
+          - login_config: 로그인 폼 셀렉터 (자동 탐지 시 비워둠)
+        """
         cfg = dict(crawl_cfg)
         cfg.setdefault("login_url", "")
-        cfg.setdefault("cart_url", "")
-        cfg.setdefault("collect_items", True)
-        cfg.setdefault("collect_payment", True)
+        cfg.setdefault("product_codes", [])
+        cfg.setdefault(
+            "product_detail_url_template",
+            "https://kor.lottedfs.com/kr/product/productDetail"
+            "?prdNo={prdNo}&adltPrdYn=Y&onOff=on",
+        )
+        cfg.setdefault("order_url", "https://kor.lps.lottedfs.com/kr/newOrder")
         cfg.setdefault("login_config", {})
         return cfg
+
+    @staticmethod
+    def _order_url_pattern(order_url: str) -> str:
+        """주문서 URL → wait_for_url 매칭 패턴 (마지막 path 세그먼트 기반)."""
+        if not order_url:
+            return "**newOrder**"
+        tail = order_url.rstrip("/").split("/")[-1].split("?")[0]
+        return f"**{tail}**" if tail else "**newOrder**"
+
+    def _login_challenge_visible(self) -> bool:
+        """현재 페이지/모달에 가시 상태의 비밀번호 입력이 노출되어 있는지."""
+        return bool(self.page.evaluate(
+            "() => {"
+            "  const inputs = document.querySelectorAll('input[type=\"password\"]');"
+            "  for (const el of inputs) {"
+            "    if (el.offsetParent === null) continue;"
+            "    const r = el.getBoundingClientRect();"
+            "    if (r.width > 0 && r.height > 0) return true;"
+            "  }"
+            "  return false;"
+            "}"
+        ))
+
+    def _handle_login_popup(
+        self, popup, credential: dict, login_config: dict,
+    ) -> bool:
+        """별도 창으로 열린 로그인 팝업 내부에서 로그인 수행.
+
+        팝업이 자동 닫힘(window.close)되거나 타임아웃까지 대기한다.
+        Returns: 로그인 성공 여부.
+        """
+        try:
+            popup.wait_for_load_state("domcontentloaded", timeout=10000)
+        except Exception:
+            pass
+        self._log(f"  로그인 팝업 감지: {popup.url[:120]}")
+
+        # 팝업에 비밀번호 입력란이 있을 때만 로그인 시도
+        try:
+            has_pwd = bool(popup.evaluate(
+                "() => !!document.querySelector('input[type=\"password\"]')"
+            ))
+        except Exception:
+            has_pwd = False
+        if not has_pwd:
+            self._log("  팝업에 비밀번호 입력란이 없습니다.")
+            return False
+
+        # BaseAgent._do_login은 page 인자를 받아 해당 page에서 동작 → popup 직접 전달
+        if not self._do_login(popup, credential, login_config):
+            self._log("  팝업 로그인 실패")
+            return False
+        self._log("  팝업 로그인 성공")
+
+        # 팝업이 알아서 닫히기를 기다림 (window.close on success)
+        try:
+            popup.wait_for_event("close", timeout=15000)
+            self._log("  팝업 자동 종료 확인")
+        except Exception:
+            self._log("  팝업이 자동 종료되지 않음 (계속 진행)")
+        return True
+
+    def _navigate_to_order_page(
+        self, detail_url: str, order_url_pattern: str,
+        credential: dict, login_config: dict,
+    ) -> bool:
+        """상품상세에서 "바로구매" → 로그인 팝업 창/모달/cartPopup 처리 → 주문서 도달.
+
+        롯데면세점 흐름:
+          상품상세 → 바로구매 클릭 → 신규 창(loginPopup) 열림 → 팝업 내 로그인
+          → 팝업 자동 종료 → 메인 페이지가 주문서(newOrder)로 이동.
+
+        팝업 창이 열리지 않는 케이스(이미 SSO 세션 보유 등)에는 메인 페이지의
+        cartPopup 모달 또는 로그인 모달을 처리한다.
+        Returns: 주문서(order_url_pattern) 도달 여부.
+        """
+        target = order_url_pattern.replace("**", "")
+        max_attempts = 3
+        ctx = self.page.context
+
+        for attempt in range(1, max_attempts + 1):
+            popup_holder = {"page": None}
+
+            def _on_new_page(p):
+                if popup_holder["page"] is None:
+                    popup_holder["page"] = p
+
+            ctx.on("page", _on_new_page)
+            try:
+                # ── 1) 바로구매 클릭 ──────────────────────────────
+                click_result = self.page.evaluate(_JS_CLICK_ORDER_BUTTON)
+                if not click_result.get("ok"):
+                    self._log(
+                        f"  주문 버튼 못 찾음: {click_result.get('error')}"
+                    )
+                    return False
+                self._log(
+                    f"  주문 버튼: {click_result.get('text')} "
+                    f"({click_result.get('method')})"
+                )
+
+                # ── 2) 신규 창(로그인 팝업) 또는 URL 변화 대기 ──
+                deadline = time.time() + 5
+                while time.time() < deadline:
+                    if popup_holder["page"] is not None:
+                        break
+                    if target in self.page.url:
+                        break
+                    self.page.wait_for_timeout(200)
+
+                # ── 3) 로그인 팝업 창이 열렸으면 그 안에서 로그인 ──
+                popup = popup_holder["page"]
+                if popup is not None and not popup.is_closed():
+                    ok = self._handle_login_popup(
+                        popup, credential, login_config,
+                    )
+                    if not ok:
+                        return False
+                    # 메인 페이지가 주문서로 자동 이동했는지 확인
+                    try:
+                        self.page.wait_for_url(
+                            order_url_pattern, timeout=15000,
+                        )
+                    except Exception:
+                        pass
+                    if target in self.page.url:
+                        break
+                    # 메인이 그대로 상품상세에 머문 경우 → 바로구매부터 재시도
+                    self._log(
+                        f"  팝업 후 주문서 미도달 (현재: {self.page.url[:80]}) → 재시도"
+                    )
+                    continue
+
+                # ── 4) 팝업 창이 안 떴다면 같은 페이지 모달 처리 ──
+                if target in self.page.url:
+                    break
+
+                # 메인 페이지에 로그인 폼이 직접 노출된 경우
+                if self._login_challenge_visible():
+                    self._log(
+                        f"  메인 페이지 로그인 폼 감지 → 재로그인 (시도 {attempt})"
+                    )
+                    if not self._do_login(self.page, credential, login_config):
+                        self._log("  재로그인 실패")
+                        return False
+                    self._log("  재로그인 성공 → 상품상세 재진입")
+                    self._safe_goto(detail_url)
+                    self.page.wait_for_timeout(
+                        DEFAULT_SETTINGS["initial_wait_ms"],
+                    )
+                    self._human_dwell()
+                    continue
+
+                # cartPopup 같은 페이지 모달 확정
+                self.page.wait_for_timeout(1200)
+                popup_result = self.page.evaluate(_JS_CLICK_POPUP_CONFIRM)
+                if popup_result.get("ok"):
+                    self._log(
+                        f"  팝업 확정 버튼: {popup_result.get('text')}"
+                    )
+                    try:
+                        self.page.wait_for_url(
+                            order_url_pattern, timeout=15000,
+                        )
+                    except Exception:
+                        pass
+                else:
+                    labels = popup_result.get("popup_buttons") or []
+                    if labels:
+                        self._log(
+                            f"  팝업 확정 버튼 미발견. 팝업 내 버튼: {labels[:8]}"
+                        )
+
+                if target in self.page.url:
+                    break
+
+                # 확정 후 다시 로그인 폼이 떴다면 재로그인
+                if self._login_challenge_visible():
+                    self._log(
+                        f"  확정 후 로그인 폼 감지 → 재로그인 (시도 {attempt})"
+                    )
+                    if not self._do_login(self.page, credential, login_config):
+                        return False
+                    self._safe_goto(detail_url)
+                    self.page.wait_for_timeout(
+                        DEFAULT_SETTINGS["initial_wait_ms"],
+                    )
+                    self._human_dwell()
+                    continue
+
+                break
+            finally:
+                try:
+                    ctx.remove_listener("page", _on_new_page)
+                except Exception:
+                    pass
+
+        try:
+            self.page.wait_for_load_state("domcontentloaded", timeout=10000)
+        except Exception:
+            pass
+        self.page.wait_for_timeout(DEFAULT_SETTINGS["initial_wait_ms"])
+        self._human_dwell()
+        return target in self.page.url
 
     def run_site(self, site_id: int):
         """단일 사이트의 주문서 결제정보를 수집한다."""
@@ -355,9 +564,10 @@ class OrderAgent(BaseAgent):
         site_name = site["site_name"]
         site_url = site["site_url"]
 
+        product_codes = cfg.get("product_codes") or []
         self._log(f"{'='*50}")
         self._log(f"  주문서 수집: {site_name}")
-        self._log(f"  장바구니: {cfg.get('cart_url') or site_url}")
+        self._log(f"  수집 대상 상품 {len(product_codes)}건")
         self._log(f"{'='*50}")
 
         start_time = time.time()
@@ -421,114 +631,125 @@ class OrderAgent(BaseAgent):
             self._human_dwell()
             self._delay()
 
-            # ── 3. 장바구니 페이지 이동 ───────────────────────────
-            cart_url = cfg.get("cart_url") or site_url
-            self._log(f"장바구니 이동: {cart_url}")
-            resp = self._safe_goto(cart_url)
-            if self._is_blocked(resp):
-                self._log("장바구니 페이지 차단됨")
-                self._finish_result(result_id, "blocked", start_time, "장바구니 차단")
-                return
-
-            self.page.wait_for_timeout(DEFAULT_SETTINGS["initial_wait_ms"])
-            self._human_dwell()
-            self._human_scroll()
-
-            # ── 4. 장바구니 상품 목록 파악 ────────────────────────
-            cart_data = self.page.evaluate(_JS_GET_CART_ITEMS)
-            cart_items = cart_data.get("items", [])
-            cart_selector = cart_data.get("selector", "")
-
-            if not cart_items:
-                self._log("장바구니에 상품이 없습니다.")
-                self._log(f"  디버그: {cart_data.get('error', '')}")
+            # ── 3. 상품 코드 목록 확인 ────────────────────────────
+            if not product_codes:
+                self._log("등록된 상품 코드가 없습니다. (crawl_config.product_codes)")
                 self._finish_result(result_id, "success", start_time)
                 return
 
-            self._log(f"장바구니 상품 {len(cart_items)}건 발견")
-            for i, item in enumerate(cart_items):
-                self._log(f"  [{i+1}] {item['name'][:50]} (수량:{item['qty']})")
+            url_template = cfg.get("product_detail_url_template", "")
+            order_url_pattern = self._order_url_pattern(cfg.get("order_url", ""))
+            self._log(f"상품 코드 {len(product_codes)}건 순회 시작")
 
-            # ── 5. 상품별 반복: 선택 → 주문서 → 수집 → 복귀 ────
-            for i, cart_item in enumerate(cart_items):
-                self._log(f"\n--- [{i+1}/{len(cart_items)}] {cart_item['name'][:50]} ---")
+            # ── 4. 상품별 반복: 상품상세 → 주문/구매 클릭 → 주문서 → 결제정보 ─
+            for i, prd_no in enumerate(product_codes):
+                detail_url = url_template.format(prdNo=prd_no)
+                self._log(f"\n--- [{i+1}/{len(product_codes)}] 상품코드 {prd_no} ---")
+                self._log(f"  상품상세 이동: {detail_url[:120]}")
 
-                # 5-a. 해당 상품만 선택
-                self._log("  전체 해제 → 해당 상품만 선택")
-                select_result = self.page.evaluate(
-                    _JS_SELECT_SINGLE_ITEM, cart_selector, cart_item["index"],
-                )
-                if not select_result.get("ok"):
-                    self._log(f"  선택 실패: {select_result.get('error')}")
+                resp = self._safe_goto(detail_url)
+                if self._is_blocked(resp):
+                    self._log(f"  상품상세 차단됨 (HTTP {resp.status if resp else 'N/A'})")
                     all_results.append({
-                        "cart_item": self._cart_item_summary(cart_item),
-                        "payment_summary": {},
-                        "error": f"선택 실패: {select_result.get('error')}",
+                        "product_code": prd_no,
+                        "product_name": "",
+                        "payment_usd": "",
+                        "payment_krw": "",
+                        "discount_rate": "",
+                        "detail_url": detail_url,
+                        "error": "상품상세 차단",
                     })
                     continue
 
-                self.page.wait_for_timeout(random.randint(500, 1000))
-
-                # 5-b. 주문하기 버튼 클릭
-                self._log("  주문하기 클릭")
-                before_url = self.page.url
-                click_result = self.page.evaluate(_JS_CLICK_ORDER_BUTTON)
-
-                if not click_result.get("ok"):
-                    self._log(f"  주문 버튼 못 찾음: {click_result.get('error')}")
-                    all_results.append({
-                        "cart_item": self._cart_item_summary(cart_item),
-                        "payment_summary": {},
-                        "error": "주문 버튼 미발견",
-                    })
-                    continue
-
-                self._log(f"  주문 버튼: {click_result.get('text')} ({click_result.get('method')})")
-
-                # 5-c. 주문서 페이지 로드 대기
-                try:
-                    self.page.wait_for_load_state("domcontentloaded", timeout=15000)
-                except Exception:
-                    pass
                 self.page.wait_for_timeout(DEFAULT_SETTINGS["initial_wait_ms"])
-                self._human_dwell()
 
-                # 5-d. 결제정보 추출
+                # 성인인증 미인증 상품 감지
+                # → 상품상세 진입 시 member/login?adultYn=Y로 리다이렉트되면 건너뜀
+                cur_url = self.page.url
+                if "member/login" in cur_url and "adultYn=Y" in cur_url:
+                    self._log(f"  성인인증 상품 - 미인증 (→ {cur_url[:100]})")
+                    all_results.append({
+                        "product_code": prd_no,
+                        "product_name": "",
+                        "payment_usd": "",
+                        "payment_krw": "",
+                        "discount_rate": "",
+                        "detail_url": detail_url,
+                        "order_url": cur_url,
+                        "error": "성인인증 상품 - 미인증",
+                    })
+                    continue
+
+                self._human_dwell()
+                self._human_scroll()
+
+                # 바로구매 → 팝업/로그인 모달 처리 → 주문서 도달까지 일괄 수행
+                self._log("  바로구매 흐름 시작")
+                reached = self._navigate_to_order_page(
+                    detail_url, order_url_pattern,
+                    credential, cfg.get("login_config") or {},
+                )
+                self._log(f"  현재 URL: {self.page.url[:120]}")
+                if not reached:
+                    self._log("  주문서 도달 실패")
+                    all_results.append({
+                        "product_code": prd_no,
+                        "product_name": "",
+                        "payment_usd": "",
+                        "payment_krw": "",
+                        "discount_rate": "",
+                        "detail_url": detail_url,
+                        "order_url": self.page.url,
+                        "error": "주문서 미도달",
+                    })
+                    continue
+
+                # 결제정보 추출
                 self._log("  결제정보 추출 중...")
                 data = self.page.evaluate(_JS_EXTRACT_ORDER_PAYMENT)
-                payment = data.get("payment_summary", {})
-                order_item_info = data.get("order_item", {})
+                product_name = data.get("product_name", "")
+                payment_usd = data.get("payment_usd", "")
+                payment_krw = data.get("payment_krw", "")
+                discount_rate = data.get("discount_rate", "")
 
-                if payment:
-                    self._log(f"  결제정보 {len(payment)}개 필드:")
-                    for key, val in payment.items():
-                        self._log(f"    {key}: {val}")
+                has_payment = bool(payment_usd or payment_krw)
+                if has_payment:
+                    self._log(f"    상품명     : {product_name or '(미수집)'}")
+                    self._log(f"    결제금액(USD): {payment_usd or '-'}")
+                    self._log(f"    결제금액(KRW): {payment_krw or '-'}")
+                    self._log(f"    할인율      : {discount_rate or '-'}")
                 else:
-                    self._log("  결제정보를 찾지 못했습니다.")
+                    self._log("  결제금액을 찾지 못했습니다.")
                     for rt in data.get("raw_texts", [])[:2]:
                         self._log(f"    raw: {rt[:150]}")
 
                 all_results.append({
-                    "cart_item": self._cart_item_summary(cart_item),
-                    "order_item": order_item_info,
-                    "payment_summary": payment,
+                    "product_code": prd_no,
+                    "product_name": product_name,
+                    "payment_usd": payment_usd,
+                    "payment_krw": payment_krw,
+                    "discount_rate": discount_rate,
+                    "detail_url": detail_url,
+                    "order_url": self.page.url,
                 })
 
-                # 5-e. 장바구니 복귀
-                self._log(f"  장바구니 복귀")
-                self._safe_goto(cart_url)
-                self.page.wait_for_timeout(3000)
-                self._human_dwell()
                 self._delay()
 
+            # ── 5. 로그아웃 ───────────────────────────────────────
+            self._log("\n로그아웃 진행")
+            self._logout(site_url)
+
             # ── 6. 전체 결과 저장 ─────────────────────────────────
-            success_count = sum(1 for r in all_results if r.get("payment_summary"))
+            success_count = sum(
+                1 for r in all_results
+                if r.get("payment_usd") or r.get("payment_krw")
+            )
             self._log(f"\n{'='*50}")
             self._log(f"  수집 완료: {success_count}/{len(all_results)}건 성공")
 
             order_data = {
                 "results": all_results,
-                "total_items": len(cart_items),
+                "total_items": len(product_codes),
                 "success_count": success_count,
                 "collected_at": datetime.now().isoformat(),
                 "credential_used": credential["login_id"],
@@ -543,7 +764,7 @@ class OrderAgent(BaseAgent):
                 products=all_results,
                 product_count=len(all_results),
                 store_info={
-                    "total_items": len(cart_items),
+                    "total_items": len(product_codes),
                     "success_count": success_count,
                 },
                 elapsed_sec=elapsed,
@@ -565,15 +786,42 @@ class OrderAgent(BaseAgent):
     # 헬퍼 메서드
     # ═══════════════════════════════════════════════════════════════
 
-    @staticmethod
-    def _cart_item_summary(cart_item: dict) -> dict:
-        """장바구니 항목에서 저장용 필드만 추출한다."""
-        return {
-            "name": cart_item.get("name", ""),
-            "brand": cart_item.get("brand", ""),
-            "qty": cart_item.get("qty", "1"),
-            "image_url": cart_item.get("image_url", ""),
-        }
+    def _logout(self, site_url: str):
+        """롯데면세점 홈으로 이동 후 javascript:logout() 호출."""
+        try:
+            # 홈 도메인이 아니면 메인 도메인 홈으로 이동
+            if "kor.lottedfs.com" not in self.page.url:
+                home_url = site_url if "kor.lottedfs.com" in (site_url or "") \
+                    else "https://kor.lottedfs.com/kr/shopmain/home"
+                self._safe_goto(home_url)
+                self.page.wait_for_timeout(1500)
+                try:
+                    self.page.wait_for_load_state(
+                        "domcontentloaded", timeout=5000,
+                    )
+                except Exception:
+                    pass
+
+            # window.logout() 호출 (페이지 글로벌 함수)
+            self.page.evaluate(
+                "() => { "
+                "  if (typeof window.logout === 'function') { "
+                "    try { window.logout(); return 'called'; } "
+                "    catch(e) { return 'error:' + e.message; } "
+                "  } "
+                "  return 'no-logout-fn'; "
+                "}"
+            )
+            self.page.wait_for_timeout(2000)
+            try:
+                self.page.wait_for_load_state(
+                    "domcontentloaded", timeout=5000,
+                )
+            except Exception:
+                pass
+            self._log(f"로그아웃 완료 (→ {self.page.url[:80]})")
+        except Exception as e:
+            self._log(f"로그아웃 중 오류: {e}")
 
     def _finish_result(self, result_id, status, start_time, error_msg=None):
         """수집 결과 레코드를 종료 상태로 업데이트한다."""

@@ -28,6 +28,7 @@ def check_npm_installed():
             [NPM, "install"],
             cwd=FRONTEND_DIR,
             check=True,
+            shell=True
         )
         print("[web] npm install 완료")
 

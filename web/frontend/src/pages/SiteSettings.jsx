@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 
 const SCHEDULE_OPTIONS = [
   { value: '',       label: '미설정' },
@@ -2395,13 +2395,16 @@ function buildCheckedState(agentType, catConfig) {
 }
 
 /* ── order: 주문서 결제정보 수집 설정 ─────────── */
+const MAX_PRODUCT_CODES = 1000
+
 function OrderConfig({ site, onSaved, showConfirm, closeConfirm }) {
   const [config, setConfig] = useState(() => {
     const c = site.config || {}
     return {
       login_url: c.login_url || '',
-      cart_url: c.cart_url || '',
-      collect_items: c.collect_items !== false,
+      product_detail_url_template: c.product_detail_url_template || '',
+      order_url: c.order_url || '',
+      product_codes: Array.isArray(c.product_codes) ? c.product_codes : [],
       collect_payment: c.collect_payment !== false,
       login_config: {
         id_selector: '', pwd_selector: '', submit_selector: '', success_indicator: '',
@@ -2409,19 +2412,41 @@ function OrderConfig({ site, onSaved, showConfirm, closeConfirm }) {
       },
     }
   })
+  const [codesText, setCodesText] = useState(() => (config.product_codes || []).join('\n'))
+
+  const parsedCodes = useMemo(() => {
+    const seen = new Set()
+    const out = []
+    for (const line of codesText.split(/\r?\n/)) {
+      const t = line.trim()
+      if (!t || seen.has(t)) continue
+      seen.add(t)
+      out.push(t)
+      if (out.length >= MAX_PRODUCT_CODES) break
+    }
+    return out
+  }, [codesText])
+
+  const rawLineCount = useMemo(
+    () => codesText.split(/\r?\n/).filter(l => l.trim()).length,
+    [codesText],
+  )
+  const overLimit = rawLineCount > MAX_PRODUCT_CODES
+  const dupCount = rawLineCount - parsedCodes.length - Math.max(0, rawLineCount - MAX_PRODUCT_CODES)
 
   const handleSave = () => {
     showConfirm({
       title: '설정 저장',
-      message: `"${site.name}" 주문서 수집 설정을 저장하시겠습니까?`,
+      message: `"${site.name}" 주문서 수집 설정을 저장하시겠습니까? (상품코드 ${parsedCodes.length}건)`,
       confirmLabel: '저장',
       onConfirm: async () => {
         closeConfirm()
         try {
+          const payload = { ...config, product_codes: parsedCodes }
           const res = await fetch(`/api/sites/${site.id}/config`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ crawl_config: config }),
+            body: JSON.stringify({ crawl_config: payload }),
           })
           if (!res.ok) throw new Error()
           onSaved()
@@ -2432,12 +2457,60 @@ function OrderConfig({ site, onSaved, showConfirm, closeConfirm }) {
     })
   }
 
+  const productCount = parsedCodes.length
+  const workflowSteps = [
+    {
+      label: '로그인',
+      desc: '로그인 페이지 진입 → ID/비밀번호 입력 → 인증',
+    },
+    {
+      label: '상품상세',
+      desc: '등록한 상품상세 URL로 순회 이동',
+    },
+    {
+      label: '상품코드',
+      desc: `등록 ${productCount.toLocaleString()}건 × 바로구매 클릭`,
+      repeat: productCount > 1,
+    },
+    {
+      label: '주문서 수집',
+      desc: '주문서 도달 → 상품명·결제금액(USD/KRW)·할인율 추출',
+      repeat: productCount > 1,
+    },
+    {
+      label: '로그아웃',
+      desc: '메인 홈으로 이동 → javascript:logout() 호출',
+      terminal: true,
+    },
+  ]
+
   return (
     <div>
       <p className="config-section-desc">
-        장바구니 상품을 한 건씩 선택 → 주문서 이동 → 결제정보(정상가/할인/혜택/결제금액) 수집을 반복합니다.
+        상품 코드별로 상품상세 → 주문서 이동 → 결제정보 수집을 반복합니다.
         로그인 계정은 하단에서 등록하세요.
       </p>
+
+      <div className="product-config-section active" style={{marginTop:12}}>
+        <div className="config-section-title">수집 워크플로우</div>
+        <div className="order-workflow">
+          {workflowSteps.map((s, i) => (
+            <div key={i} className="order-workflow-step">
+              <div className={`order-workflow-node${s.terminal ? ' terminal' : ''}`}>
+                <span className="order-workflow-num">{i + 1}</span>
+                <div className="order-workflow-label">
+                  {s.label}
+                  {s.repeat && <span className="order-workflow-loop">↻ 반복</span>}
+                </div>
+                <div className="order-workflow-desc">{s.desc}</div>
+              </div>
+              {i < workflowSteps.length - 1 && (
+                <div className="order-workflow-arrow">→</div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
 
       <div className="product-config-section active" style={{marginTop:12}}>
         <div className="config-section-title">페이지 URL</div>
@@ -2447,20 +2520,62 @@ function OrderConfig({ site, onSaved, showConfirm, closeConfirm }) {
             <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>(비워두면 사이트 URL 사용)</span>
             <input
               className="form-control"
-              placeholder="https://example.com/login"
+              placeholder="https://kor.lottedfs.com/kr/login"
               value={config.login_url}
               onChange={e => setConfig(c => ({...c, login_url: e.target.value}))}
               style={{marginTop:4,fontSize:12}}
             />
           </label>
           <label style={{fontSize:12}}>
-            <span style={{color:'var(--text-secondary)'}}>장바구니 URL</span>
-            <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>(비워두면 사이트 URL 사용)</span>
+            <span style={{color:'var(--text-secondary)'}}>상품상세 URL</span>
+            <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>{'(상품코드 위치에 {prdNo} 사용)'}</span>
             <input
               className="form-control"
-              placeholder="https://example.com/cart"
-              value={config.cart_url}
-              onChange={e => setConfig(c => ({...c, cart_url: e.target.value}))}
+              placeholder="https://kor.lottedfs.com/kr/product/productDetail?prdNo={prdNo}&adltPrdYn=Y&onOff=on"
+              value={config.product_detail_url_template}
+              onChange={e => setConfig(c => ({...c, product_detail_url_template: e.target.value}))}
+              style={{marginTop:4,fontSize:12}}
+            />
+          </label>
+          <div style={{fontSize:12}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
+              <div>
+                <span style={{color:'var(--text-secondary)'}}>상품코드</span>
+                <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>
+                  (엔터로 구분, 최대 {MAX_PRODUCT_CODES.toLocaleString()}건)
+                </span>
+              </div>
+              <span style={{
+                fontSize:11,
+                color: overLimit ? 'var(--danger, #d33)' : 'var(--text-secondary)',
+                fontWeight: overLimit ? 600 : 400,
+              }}>
+                등록 {parsedCodes.length.toLocaleString()}건
+                {dupCount > 0 && ` (중복 ${dupCount}건 제외)`}
+                {overLimit && ` · 최대 ${MAX_PRODUCT_CODES.toLocaleString()}건 초과`}
+              </span>
+            </div>
+            <textarea
+              className="form-control"
+              placeholder={'20000996458\n20000996459\n...'}
+              value={codesText}
+              onChange={e => setCodesText(e.target.value)}
+              rows={8}
+              spellCheck={false}
+              style={{
+                marginTop:4,fontSize:12,fontFamily:'monospace',
+                resize:'vertical',minHeight:120,
+              }}
+            />
+          </div>
+          <label style={{fontSize:12}}>
+            <span style={{color:'var(--text-secondary)'}}>주문서 URL</span>
+            <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>(구매 클릭 후 도달 URL 패턴)</span>
+            <input
+              className="form-control"
+              placeholder="https://kor.lps.lottedfs.com/kr/newOrder"
+              value={config.order_url}
+              onChange={e => setConfig(c => ({...c, order_url: e.target.value}))}
               style={{marginTop:4,fontSize:12}}
             />
           </label>
@@ -2477,15 +2592,6 @@ function OrderConfig({ site, onSaved, showConfirm, closeConfirm }) {
             <div>
               <strong>결제정보 수집</strong>
               <span className="config-section-desc" style={{margin:0}}>정상가, 할인, 혜택, 결제금액, 면세한도, 적립 포인트</span>
-            </div>
-          </label>
-          <label className="order-toggle-row">
-            <input type="checkbox" checked={config.collect_items}
-              onChange={e => setConfig(c => ({...c, collect_items: e.target.checked}))}
-            />
-            <div>
-              <strong>장바구니 상품 수집</strong>
-              <span className="config-section-desc" style={{margin:0}}>상품명, 수량, 정상가, 판매가, 브랜드</span>
             </div>
           </label>
         </div>

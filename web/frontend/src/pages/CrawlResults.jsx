@@ -979,38 +979,35 @@ function DirectoryDetail({ detail }) {
 
 
 /* ── order: 주문서 결제정보 결과 ─────────────────── */
-const PAYMENT_LABELS = {
-  discount_rate: '할인율',
-  payment_usd: '결제금액($)',
-  payment_krw: '결제금액(원)',
-  regular_price: '정상가',
-  regular_price_usd: '정상가($)',
-  regular_price_krw: '정상가(원)',
-  member_discount: '회원할인',
-  member_discount_usd: '회원할인($)',
-  member_discount_krw: '회원할인(원)',
-  benefits: '혜택',
-  benefits_usd: '혜택($)',
-  benefits_krw: '혜택(원)',
-  instant_discount: '즉시할인',
-  coupon_discount: '쿠폰할인',
-  payment_amount: '결제금액',
-  final_payment: '최종결제금액',
-  duty_free_limit: '면세한도적용금액',
-  tax_point: '과세 포인트',
-  reward_points: '적립 포인트',
-  shipping_fee: '배송비',
+//  엔진 출력 평탄 스키마:
+//    { product_code, product_name, payment_usd, payment_krw, discount_rate,
+//      detail_url, order_url, error? }
+function orderRowFields(r) {
+  // 신규(평탄) → 구버전(payment_summary) 순으로 폴백
+  const pay = r.payment_summary || {}
+  const item = r.order_item || r.cart_item || {}
+  return {
+    product_code: r.product_code || '',
+    product_name: r.product_name || item.name || '',
+    payment_usd: r.payment_usd || pay.payment_usd || pay.payment_amount || '',
+    payment_krw: r.payment_krw || pay.payment_krw || '',
+    discount_rate: r.discount_rate || pay.discount_rate || '',
+    error: r.error || '',
+  }
 }
 
 function OrderDetail({ detail }) {
   const results = detail.products || []
   const storeInfo = detail.store_info || {}
-  const successCount = storeInfo.success_count || results.filter(r => r.payment_summary && Object.keys(r.payment_summary).length > 0).length
+  const successCount = storeInfo.success_count ?? results.filter(r => {
+    const f = orderRowFields(r)
+    return !!(f.payment_usd || f.payment_krw)
+  }).length
 
   return (
     <>
       <div style={{display:'flex',gap:24,marginBottom:16,fontSize:13,color:'var(--text-secondary)',flexWrap:'wrap'}}>
-        <span>장바구니 상품: <strong>{results.length}</strong>건</span>
+        <span>수집 대상 상품: <strong>{results.length}</strong>건</span>
         <span>결제정보 수집: <strong>{successCount}</strong>건</span>
       </div>
 
@@ -1020,32 +1017,34 @@ function OrderDetail({ detail }) {
             <thead>
               <tr>
                 <th style={{width:30}}>#</th>
+                <th style={{width:130}}>상품코드</th>
                 <th>상품명</th>
-                <th style={{width:60,textAlign:'center'}}>수량</th>
                 <th style={{width:70,textAlign:'center'}}>할인율</th>
-                <th style={{width:100,textAlign:'right'}}>결제금액($)</th>
-                <th style={{width:110,textAlign:'right'}}>결제금액(원)</th>
+                <th style={{width:110,textAlign:'right'}}>결제금액($)</th>
+                <th style={{width:130,textAlign:'right'}}>결제금액(원)</th>
               </tr>
             </thead>
             <tbody>
               {results.map((r, i) => {
-                const item = r.cart_item || r.order_item || {}
-                const pay = r.payment_summary || {}
+                const f = orderRowFields(r)
+                const missing = !f.payment_usd && !f.payment_krw
                 return (
                   <tr key={i}>
                     <td style={{color:'var(--text-secondary)'}}>{i + 1}</td>
-                    <td style={{fontWeight:500,maxWidth:250,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-                      {item.name || '-'}
+                    <td style={{fontFamily:'monospace',fontSize:12}}>
+                      {f.product_code || '-'}
                     </td>
-                    <td style={{textAlign:'center'}}>{item.qty || '1'}</td>
-                    <td style={{textAlign:'center',color:'var(--danger)',fontWeight:600}}>
-                      {pay.discount_rate || '-'}
+                    <td style={{fontWeight:500,maxWidth:300,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                      {f.product_name || (missing && f.error ? <span style={{color:'var(--danger)'}}>{f.error}</span> : '-')}
+                    </td>
+                    <td style={{textAlign:'center',color: f.discount_rate ? 'var(--danger)' : 'var(--text-secondary)',fontWeight:600}}>
+                      {f.discount_rate || '-'}
                     </td>
                     <td style={{textAlign:'right',fontWeight:600}}>
-                      {pay.payment_usd || pay.payment_amount || '-'}
+                      {f.payment_usd || '-'}
                     </td>
                     <td style={{textAlign:'right',fontWeight:600}}>
-                      {pay.payment_krw || '-'}
+                      {f.payment_krw || '-'}
                     </td>
                   </tr>
                 )
@@ -1053,35 +1052,6 @@ function OrderDetail({ detail }) {
             </tbody>
           </table>
         </div>
-      )}
-
-      {results.length > 0 && results.some(r => r.payment_summary && Object.keys(r.payment_summary).length > 3) && (
-        <>
-          <h4 style={{margin:'20px 0 8px',fontSize:14}}>상세 결제정보</h4>
-          {results.map((r, i) => {
-            const item = r.cart_item || r.order_item || {}
-            const pay = r.payment_summary || {}
-            const keys = Object.keys(pay)
-            if (keys.length === 0) return null
-            return (
-              <div key={i} className="order-payment-card" style={{marginBottom:8}}>
-                <div style={{fontSize:12,fontWeight:600,marginBottom:8,color:'var(--text-secondary)'}}>
-                  [{i+1}] {item.name || '상품'}
-                </div>
-                <table className="price-table" style={{fontSize:12}}>
-                  <tbody>
-                    {keys.map(key => (
-                      <tr key={key} className={key.startsWith('payment') ? 'order-total-row' : ''}>
-                        <td style={{width:130}}>{PAYMENT_LABELS[key] || key}</td>
-                        <td style={{textAlign:'right'}}>{pay[key]}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )
-          })}
-        </>
       )}
 
       {results.length === 0 && (
