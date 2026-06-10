@@ -12,8 +12,8 @@
   - discount_rate : 할인율 (예: "50%")
 
 파이프라인:
-  1. 브라우저 시작 (Stealth + 쿠키 로드)
-  2. 로그인 페이지 접속 → 로그인 (계정 로테이션)
+  1. 브라우저 시작 (Headless Stealth + 쿠키 로드)
+  2. 메인 도메인 로그인 + lps 서브도메인 사전 로그인 (2단계)
   3. 상품 코드 목록(product_codes) 순회:
      a. 상품상세 URL 이동 (product_detail_url_template + prdNo)
      b. 구매하기/주문하기 버튼 클릭 → 주문서 페이지 이동
@@ -26,6 +26,10 @@
   - 페이지 이동 간 _delay() 적용
 
 대상: 롯데면세점 등 로그인 기반 면세점 주문 페이지
+
+도메인 구조 (롯데면세점):
+  - kor.lottedfs.com      → 메인 사이트 (로그인, 상품상세)
+  - kor.lps.lottedfs.com  → 주문서 (별도 세션 체계, 사전 로그인 필요)
 """
 import json
 import os
@@ -127,7 +131,22 @@ _JS_CLICK_ORDER_BUTTON = """() => {
     });
     if (buyNow) return clickAndReport(buyNow, 'cartPopup-href');
 
-    // ── 3) 텍스트 매칭 ("바로 구매" 공백 포함 / "바로구매" 모두 허용) ──
+    // ── 3) 이미지 alt 매칭 (img 기반 바로구매 버튼) ──
+    const buyImgs = [...document.querySelectorAll(
+        'a > img[alt], button > img[alt]'
+    )];
+    const imgBtn = buyImgs.find(img => {
+        const alt = (img.alt || '').replace(/\\s+/g, '').trim();
+        if (!/바로구매|주문하기|구매하기|ORDER/i.test(alt)) return false;
+        const parent = img.closest('a, button');
+        return parent && isVisible(parent);
+    });
+    if (imgBtn) {
+        const parent = imgBtn.closest('a, button');
+        return clickAndReport(parent, 'img-alt', { alt: imgBtn.alt });
+    }
+
+    // ── 4) 텍스트 매칭 ("바로 구매" 공백 포함 / "바로구매" 모두 허용) ──
     const allBtns = [...document.querySelectorAll(
         'button, a, a[role="button"], input[type="button"]'
     )];
@@ -138,7 +157,7 @@ _JS_CLICK_ORDER_BUTTON = """() => {
     });
     if (textBtn) return clickAndReport(textBtn, 'text');
 
-    // ── 4) 클래스 기반 폴백 ──
+    // ── 5) 클래스 기반 폴백 ──
     const candidates = [
         '[class*="btn_buy_now"], [class*="btnBuyNow"]',
         'button[class*="order"], a[class*="order"]',
@@ -339,12 +358,18 @@ class OrderAgent(BaseAgent):
         cfg = dict(crawl_cfg)
         cfg.setdefault("login_url", "")
         cfg.setdefault("product_codes", [])
-        cfg.setdefault(
-            "product_detail_url_template",
-            "https://kor.lottedfs.com/kr/product/productDetail"
-            "?prdNo={prdNo}&adltPrdYn=Y&onOff=on",
-        )
-        cfg.setdefault("order_url", "https://kor.lps.lottedfs.com/kr/newOrder")
+        # 빈 문자열이면 기본값으로 대체 (DB에서 빈 값이 올 수 있음)
+        if not cfg.get("product_detail_url_template"):
+            cfg["product_detail_url_template"] = (
+                "https://kor.lottedfs.com/kr/product/productDetail"
+                "?prdNo={prdNo}&adltPrdYn=Y&onOff=on"
+            )
+        if not cfg.get("order_url"):
+            cfg["order_url"] = "https://kor.lps.lottedfs.com/kr/newOrder"
+        if not cfg.get("lps_login_url"):
+            cfg["lps_login_url"] = (
+                "https://kor.lps.lottedfs.com/kr/member/login"
+            )
         cfg.setdefault("login_config", {})
         return cfg
 
@@ -581,11 +606,11 @@ class OrderAgent(BaseAgent):
             raw_domain = self._get_cookie_domain(site_url)
             parts = raw_domain.split(".")
             cookie_domain = ".".join(parts[-2:]) if len(parts) > 2 else raw_domain
-            # lps 도메인은 headless 브라우저를 감지하여 image/png 반환
-            # → headless=False (화면 있는 브라우저)로 봇 차단 우회
-            self._log(f"브라우저 시작 (cookie: {cookie_domain}, headed)...")
+            # Headless 모드로 실행 (AWS 등 화면 없는 서버 환경 지원)
+            # lps 서브도메인은 사전 로그인으로 봇 차단 우회
+            self._log(f"브라우저 시작 (cookie: {cookie_domain}, headless)...")
             self.page = self._create_page(
-                cookie_domain=cookie_domain, headless=False,
+                cookie_domain=cookie_domain, headless=True,
             )
 
             # ── 2. 로그인 ─────────────────────────────────────────
@@ -631,6 +656,34 @@ class OrderAgent(BaseAgent):
             self._human_dwell()
             self._delay()
 
+            # ── 2-2. lps 서브도메인 사전 로그인 ──────────────────
+            # kor.lps.lottedfs.com은 별도 세션 체계 → 사전 로그인 필요
+            # (성인인증 상품 접근 + 팝업 없이 바로 주문서 도달)
+            lps_login_url = cfg.get(
+                "lps_login_url",
+                "https://kor.lps.lottedfs.com/kr/member/login",
+            )
+            self._log(f"lps 서브도메인 로그인: {lps_login_url}")
+            resp = self._safe_goto(lps_login_url)
+            self.page.wait_for_timeout(3000)
+
+            lps_has_pwd = self.page.evaluate(
+                "() => !!document.querySelector('input[type=\"password\"]')"
+            )
+            if lps_has_pwd:
+                lps_ok = self._do_login(
+                    self.page, credential, cfg.get("login_config"),
+                )
+                if lps_ok:
+                    self._log("lps 로그인 성공")
+                else:
+                    self._log("[WARN] lps 로그인 실패 - 팝업 로그인으로 대체 시도")
+            else:
+                self._log("lps 이미 로그인 상태")
+
+            self._human_dwell()
+            self._delay()
+
             # ── 3. 상품 코드 목록 확인 ────────────────────────────
             if not product_codes:
                 self._log("등록된 상품 코드가 없습니다. (crawl_config.product_codes)")
@@ -663,22 +716,40 @@ class OrderAgent(BaseAgent):
 
                 self.page.wait_for_timeout(DEFAULT_SETTINGS["initial_wait_ms"])
 
-                # 성인인증 미인증 상품 감지
-                # → 상품상세 진입 시 member/login?adultYn=Y로 리다이렉트되면 건너뜀
+                # 성인인증 상품 감지
+                # → 상품상세 진입 시 member/login?adultYn=Y로 리다이렉트
+                # → lps 로그인 페이지에서 재로그인 후 상품상세 재접근
                 cur_url = self.page.url
                 if "member/login" in cur_url and "adultYn=Y" in cur_url:
-                    self._log(f"  성인인증 상품 - 미인증 (→ {cur_url[:100]})")
-                    all_results.append({
-                        "product_code": prd_no,
-                        "product_name": "",
-                        "payment_usd": "",
-                        "payment_krw": "",
-                        "discount_rate": "",
-                        "detail_url": detail_url,
-                        "order_url": cur_url,
-                        "error": "성인인증 상품 - 미인증",
-                    })
-                    continue
+                    self._log(f"  성인인증 리다이렉트 감지 → 재로그인 시도")
+                    adult_has_pwd = self.page.evaluate(
+                        "() => !!document.querySelector('input[type=\"password\"]')"
+                    )
+                    if adult_has_pwd:
+                        adult_ok = self._do_login(
+                            self.page, credential, cfg.get("login_config"),
+                        )
+                        if adult_ok:
+                            self._log("  성인인증 로그인 성공 → 상품상세 재접근")
+                            resp = self._safe_goto(detail_url)
+                            self.page.wait_for_timeout(
+                                DEFAULT_SETTINGS["initial_wait_ms"],
+                            )
+                            cur_url = self.page.url
+                    # 재로그인 후에도 여전히 로그인 페이지이면 건너뜀
+                    if "member/login" in cur_url:
+                        self._log(f"  성인인증 상품 접근 실패 (→ {cur_url[:100]})")
+                        all_results.append({
+                            "product_code": prd_no,
+                            "product_name": "",
+                            "payment_usd": "",
+                            "payment_krw": "",
+                            "discount_rate": "",
+                            "detail_url": detail_url,
+                            "order_url": cur_url,
+                            "error": "성인인증 상품 - 접근 실패",
+                        })
+                        continue
 
                 self._human_dwell()
                 self._human_scroll()
