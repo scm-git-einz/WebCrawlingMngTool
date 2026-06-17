@@ -128,6 +128,7 @@ class BrowserManager:
         )
         if proxy:
             context_kwargs["proxy"] = proxy
+            context_kwargs["ignore_https_errors"] = True
 
         self._context = self._browser.new_context(**context_kwargs)
         self._context.set_default_timeout(merged.get("timeout", 30000))
@@ -184,6 +185,7 @@ class BrowserManager:
         )
         if proxy:
             context_kwargs["proxy"] = proxy
+            context_kwargs["ignore_https_errors"] = True
 
         self._context = self._browser.new_context(**context_kwargs)
         self._context.set_default_timeout(self._config.get("timeout", 30000))

@@ -1121,37 +1121,41 @@ select.form-control { cursor: pointer; }
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  margin-bottom: 6px;
+  margin-top: 12px;
+  margin-bottom: 8px;
 }
 
 .field-checkbox {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  gap: 7px;
+  padding: 9px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
   cursor: pointer;
   font-size: 13px;
+  font-weight: 500;
   transition: all 0.15s;
   user-select: none;
+  background: #fff;
 }
 
 .field-checkbox:hover {
   border-color: var(--primary);
-  background: #f8fafc;
+  background: #f0f7ff;
 }
 
 .field-checkbox.checked {
-  border-color: var(--primary);
+  border: 2px solid var(--primary);
   background: #eff6ff;
   color: #1e40af;
 }
 
 .field-checkbox input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   accent-color: var(--primary);
+  flex-shrink: 0;
 }
 
 /* ─── List Type Options ─── */
@@ -1165,20 +1169,21 @@ select.form-control { cursor: pointer; }
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 11px 14px;
   border: 1.5px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
   cursor: pointer;
   transition: all 0.15s;
+  background: #fff;
 }
 
 .list-type-option:hover {
   border-color: var(--primary);
-  background: #f8fafc;
+  background: #f0f7ff;
 }
 
 .list-type-option.selected {
-  border-color: var(--primary);
+  border: 2px solid var(--primary);
   background: #eff6ff;
 }
 

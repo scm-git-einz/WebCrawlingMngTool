@@ -114,7 +114,7 @@ def get_result_detail(result_id: int):
     try:
         cur = db.conn.cursor()
         cur.execute("""
-            SELECT r.*, s.site_name, s.site_url, s.agent_type, s.category
+            SELECT r.*, s.site_name, s.site_url, s.agent_type, s.category, s.crawl_config
             FROM crawl_results r
             JOIN crawl_sites s ON r.site_id = s.id
             WHERE r.id = ?
@@ -134,6 +134,11 @@ def get_result_detail(result_id: int):
                 result["store_info"] = json.loads(result["store_info"])
             except json.JSONDecodeError:
                 result["store_info"] = {}
+        if result.get("crawl_config") and isinstance(result["crawl_config"], str):
+            try:
+                result["crawl_config"] = json.loads(result["crawl_config"])
+            except json.JSONDecodeError:
+                result["crawl_config"] = {}
         return result
     finally:
         db.close()

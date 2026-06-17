@@ -26,6 +26,7 @@ const CATEGORY_LABELS = {
   '뉴스':             { icon: '\u{1F4F0}', color: '#64748b' },
   '카페':             { icon: '\u{2615}', color: '#a855f7' },
   '주문서':           { icon: '\u{1F4B3}', color: '#059669' },
+  '로컬':             { icon: '\u{1F3EA}', color: '#10b981' },
 }
 
 
@@ -986,7 +987,7 @@ function CredentialManager({ siteId, credentials: initialCreds, showConfirm, clo
 
 function ConfigModal({ site, onClose, onSaved, showConfirm, closeConfirm }) {
   const agentType = site.agent_type
-  const modalWidth = agentType === 'news' ? 560 : agentType === 'product' ? 580 : agentType === 'order' ? 560 : 520
+  const modalWidth = agentType === 'news' ? 560 : agentType === 'product' ? 580 : agentType === 'order' ? 560 : agentType === 'brand' ? 560 : agentType === 'local' ? 520 : 520
 
   const [editInfo, setEditInfo] = useState({ name: site.name, url: site.url })
   const [infoEditing, setInfoEditing] = useState(false)
@@ -1101,7 +1102,9 @@ function ConfigModal({ site, onClose, onSaved, showConfirm, closeConfirm }) {
           {agentType === 'banner'    && <BannerConfig    site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
           {agentType === 'directory' && <DirectoryConfig site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
           {agentType === 'order'     && <OrderConfig     site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
-          <CredentialManager siteId={site.id} credentials={site.credentials} showConfirm={showConfirm} closeConfirm={closeConfirm} />
+          {agentType === 'brand'     && <BrandConfig     site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
+          {agentType === 'local'     && <LocalConfig     site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
+          {agentType !== 'brand'     && <CredentialManager siteId={site.id} credentials={site.credentials} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
         </div>
       </div>
     </div>
@@ -1118,6 +1121,7 @@ const PRODUCT_FIELDS = [
   { key: 'rank',           label: '순위',         group: 'extra' },
   { key: 'original_price', label: '원가',         group: 'extra' },
   { key: 'discount_rate',  label: '할인율',       group: 'extra' },
+  { key: 'discount_price', label: '할인가',       group: 'extra' },
   { key: 'gift',           label: '사은품',       group: 'extra' },
   { key: 'reference_no',   label: '레퍼런스번호', group: 'extra' },
   { key: 'category',       label: '카테고리',     group: 'extra' },
@@ -2298,6 +2302,10 @@ const CATEGORY_DEFAULT_CONFIGS = {
     optional_fields: ['original_price','discount_rate','category'],
     list_type: 'catalog', pagination: 'scroll', max_pages: 10, max_items: 0, detail_page: true,
   },
+  '로컬': {
+    local_type: 'oliveyoung',
+    collect_fields: ['brand', 'name', 'regular_price', 'discounted_price', 'discount_rate'],
+  },
   /* banner */
   '경쟁사배너': {
     banner_areas: ['hero','sub_banner'], capture_screenshot: true,
@@ -2325,6 +2333,7 @@ const COLLECT_ITEMS_BY_AGENT = {
       { key: 'rank',           label: '순위',         group: 'extra',  default: false },
       { key: 'original_price', label: '원가',         group: 'extra',  default: false },
       { key: 'discount_rate',  label: '할인율',       group: 'extra',  default: false },
+      { key: 'discount_price', label: '할인가',       group: 'extra',  default: false },
       { key: 'gift',           label: '사은품',       group: 'extra',  default: false },
       { key: 'reference_no',   label: '레퍼런스번호', group: 'extra',  default: false },
       { key: 'category',       label: '카테고리',     group: 'extra',  default: false },
@@ -2370,6 +2379,19 @@ const COLLECT_ITEMS_BY_AGENT = {
     ],
     listTypes: DIR_LIST_TYPE_OPTIONS,
   },
+  local: {
+    label: '로컬 수집 항목',
+    desc: '수집할 상품 정보를 선택합니다',
+    color: '#ecfdf5',
+    textColor: '#065f46',
+    fields: [
+      { key: 'brand',            label: '브랜드',  group: 'basic', default: true },
+      { key: 'name',             label: '상품명',  group: 'basic', default: true },
+      { key: 'regular_price',    label: '정상가',  group: 'basic', default: true },
+      { key: 'discounted_price', label: '할인가',  group: 'basic', default: true },
+      { key: 'discount_rate',    label: '할인율',  group: 'basic', default: true },
+    ],
+  },
 }
 
 /* ─── 카테고리 기본 config에서 체크 상태를 추출 ─── */
@@ -2387,6 +2409,9 @@ function buildCheckedState(agentType, catConfig) {
       const areas = catConfig?.banner_areas || []
       fields[f.key] = areas.includes(f.key)
     } else if (agentType === 'directory') {
+      const coll = catConfig?.collect_fields || []
+      fields[f.key] = coll.includes(f.key)
+    } else if (agentType === 'local') {
       const coll = catConfig?.collect_fields || []
       fields[f.key] = coll.includes(f.key)
     }
@@ -2651,6 +2676,281 @@ function OrderConfig({ site, onSaved, showConfirm, closeConfirm }) {
 }
 
 
+/* ── brand: 브랜드 공식홈 상품가격 수집 설정 ──────── */
+const BRAND_COLLECT_FIELDS = [
+  // 기본 필드
+  { key: 'brand',          label: '브랜드',     group: 'basic' },
+  { key: 'name',           label: '상품명',     group: 'basic' },
+  { key: 'original_price', label: '정상가격(원화)', group: 'basic' },
+  // 추가 필드
+  { key: 'reference_no',   label: 'Ref No',     group: 'extra' },
+  { key: 'is_new',         label: '신제품여부', group: 'extra' },
+  { key: 'category',       label: '카테고리',   group: 'extra' },
+]
+
+/* ── local: 로컬 e커머스 상품 상세 수집 설정 ──────── */
+const LOCAL_COLLECT_FIELDS = [
+  { key: 'brand',            label: '브랜드',  group: 'basic' },
+  { key: 'name',             label: '상품명',  group: 'basic' },
+  { key: 'regular_price',    label: '정상가',  group: 'basic' },
+  { key: 'discounted_price', label: '할인가',  group: 'basic' },
+  { key: 'discount_rate',    label: '할인율',  group: 'basic' },
+]
+
+function LocalConfig({ site, onSaved, showConfirm, closeConfirm }) {
+  const initConfig = {
+    local_type: 'oliveyoung',
+    collect_fields: ['brand', 'name', 'regular_price', 'discounted_price', 'discount_rate'],
+    ...site.config,
+  }
+  const [config, setConfig]   = useState(initConfig)
+  const [urlText, setUrlText] = useState((site.keywords || []).map(k => k.keyword).join('\n'))
+  const [saving, setSaving]   = useState(false)
+
+  const urlCount = urlText.split(/\n/).filter(s => s.trim()).length
+
+  const toggleField = (key) => {
+    const fields = config.collect_fields || []
+    setConfig({
+      ...config,
+      collect_fields: fields.includes(key) ? fields.filter(f => f !== key) : [...fields, key],
+    })
+  }
+
+  const handleSave = () => {
+    showConfirm({
+      title: '설정 저장',
+      message: `"${site.name}" 로컬 수집 설정을 저장하시겠습니까?`,
+      confirmLabel: '저장',
+      onConfirm: async () => {
+        closeConfirm()
+        setSaving(true)
+        try {
+          const res = await fetch(`/api/sites/${site.id}/config`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ crawl_config: config }),
+          })
+          if (!res.ok) { alert('저장 실패: 서버 오류'); return }
+
+          const prevKeywords = (site.keywords || []).map(k => k.keyword)
+          const nextKeywords = urlText.split(/\n/).map(s => s.trim()).filter(Boolean)
+          for (const kw of prevKeywords.filter(k => !nextKeywords.includes(k))) {
+            await fetch(`/api/sites/${site.id}/keywords/${encodeURIComponent(kw)}`, { method: 'DELETE' })
+          }
+          for (const kw of nextKeywords.filter(k => !prevKeywords.includes(k))) {
+            await fetch(`/api/sites/${site.id}/keywords`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ keyword: kw }),
+            })
+          }
+          onSaved()
+        } catch (e) {
+          alert('저장 실패: ' + (e.message || '네트워크 오류'))
+        } finally {
+          setSaving(false)
+        }
+      },
+    })
+  }
+
+  return (
+    <>
+      <div style={{background:'#ecfdf5',padding:'12px 16px',borderRadius:8,marginBottom:20,fontSize:13,color:'#065f46'}}>
+        상품 상세 페이지 URL에서 브랜드·상품명·가격 정보를 수집합니다.
+      </div>
+
+      {/* ── 수집 필드 ── */}
+      <div className="product-config-section active">
+        <h4 className="config-section-title">수집 필드</h4>
+        <div className="config-section-desc">수집할 데이터 항목을 선택합니다</div>
+        <div className="field-checkbox-grid">
+          {LOCAL_COLLECT_FIELDS.map(f => {
+            const checked = (config.collect_fields || []).includes(f.key)
+            return (
+              <label key={f.key} className={`field-checkbox ${checked ? 'checked' : ''}`}>
+                <input type="checkbox" checked={checked} onChange={() => toggleField(f.key)} />
+                <span>{f.label}</span>
+              </label>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* ── 상품 상세 URL ── */}
+      <div className="product-config-section active">
+        <h4 className="config-section-title">상품 상세 URL</h4>
+        <div className="config-section-desc">수집할 상품 상세 페이지 URL을 입력합니다 (줄바꿈으로 구분)</div>
+        <textarea
+          className="kw-textarea"
+          value={urlText}
+          onChange={e => setUrlText(e.target.value)}
+          placeholder={"https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo=...\nhttps://..."}
+          rows={8}
+          style={{ fontFamily:'monospace', fontSize:'12px', marginTop:8 }}
+        />
+        <div className="kw-count" style={{marginTop:4}}>{urlCount.toLocaleString()}건 등록</div>
+      </div>
+
+      <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:20}}>
+        <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+          {saving ? '저장 중...' : '저장'}
+        </button>
+      </div>
+    </>
+  )
+}
+
+function BrandConfig({ site, onSaved, showConfirm, closeConfirm }) {
+  const [keywordText, setKeywordText] = useState(
+    (site.keywords || []).map(k => k.keyword).join('\n')
+  )
+  const [config, setConfig] = useState({
+    collect_fields: ['brand', 'name', 'image', 'original_price'],
+    ...site.config,
+  })
+  const [saving, setSaving] = useState(false)
+  const [checkingUrl, setCheckingUrl] = useState(false)
+  const [urlCheckResult, setUrlCheckResult] = useState(null)
+
+  const handleCheckUrl = async () => {
+    if (!config.search_url_template) return
+    const kw = keywordText.split(/[,\n]/).map(s => s.trim()).filter(Boolean)[0]
+    if (!kw) { alert('연결 확인을 위해 검색어(SKU)를 먼저 입력해주세요.'); return }
+    setCheckingUrl(true)
+    setUrlCheckResult(null)
+    try {
+      const res = await fetch(`/api/sites/${site.id}/check-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url_template: config.search_url_template, keyword: kw }),
+      })
+      const data = await res.json()
+      setUrlCheckResult(data)
+    } catch (e) {
+      setUrlCheckResult({ ok: false, message: '요청 실패: ' + e.message })
+    } finally {
+      setCheckingUrl(false)
+    }
+  }
+
+  const toggleField = (key) => {
+    const fields = config.collect_fields || []
+    const next = fields.includes(key)
+      ? fields.filter(f => f !== key)
+      : [...fields, key]
+    setConfig({ ...config, collect_fields: next })
+  }
+
+  const handleSaveConfig = () => {
+    showConfirm({
+      title: '설정 저장',
+      message: `"${site.name}" 브랜드 수집 설정을 저장하시겠습니까?`,
+      confirmLabel: '저장',
+      onConfirm: async () => {
+        closeConfirm()
+        setSaving(true)
+        try {
+          // crawl_config 저장
+          const res = await fetch(`/api/sites/${site.id}/config`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ crawl_config: config }),
+          })
+          if (!res.ok) { alert('저장 실패: 서버 오류가 발생했습니다'); return }
+
+          // 검색어 동기화 (기존 삭제 후 재등록)
+          const prevKeywords = (site.keywords || []).map(k => k.keyword)
+          const nextKeywords = keywordText.split(/[,\n]/).map(s => s.trim()).filter(Boolean)
+          for (const kw of prevKeywords.filter(k => !nextKeywords.includes(k))) {
+            await fetch(`/api/sites/${site.id}/keywords/${encodeURIComponent(kw)}`, { method: 'DELETE' })
+          }
+          for (const kw of nextKeywords.filter(k => !prevKeywords.includes(k))) {
+            await fetch(`/api/sites/${site.id}/keywords`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ keyword: kw }),
+            })
+          }
+          onSaved()
+        } catch (e) {
+          alert('저장 실패: ' + (e.message || '네트워크 오류'))
+        } finally {
+          setSaving(false)
+        }
+      },
+    })
+  }
+
+  const fields = config.collect_fields || []
+
+  return (
+    <>
+      {/* 상품 상세 URL */}
+      <div className="product-config-section active" style={{marginBottom:14}}>
+        <h4 className="config-section-title">상품 상세 URL</h4>
+        <div style={{display:'flex', gap:8, marginTop:8}}>
+          <input
+            className="form-control"
+            style={{flex:1}}
+            placeholder="예) https://www.brand.com/products/{keyword}.html"
+            value={config.search_url_template || ''}
+            onChange={e => { setConfig({ ...config, search_url_template: e.target.value }); setUrlCheckResult(null) }}
+          />
+          <button
+            className="btn btn-secondary btn-sm"
+            style={{whiteSpace:'nowrap'}}
+            onClick={handleCheckUrl}
+            disabled={checkingUrl || !config.search_url_template}
+          >
+            {checkingUrl ? '확인 중...' : '연결 확인'}
+          </button>
+        </div>
+        {urlCheckResult && (
+          <div style={{marginTop:6, fontSize:12, color: urlCheckResult.ok ? 'var(--success, #16a34a)' : 'var(--danger, #dc2626)'}}>
+            {urlCheckResult.ok ? '✓' : '✗'} {urlCheckResult.message}
+            {urlCheckResult.url && <span style={{marginLeft:6, color:'#94a3b8'}}>{urlCheckResult.url}</span>}
+          </div>
+        )}
+      </div>
+
+      {/* 상품 검색 */}
+      <div className="product-config-section active" style={{marginBottom:14}}>
+        <h4 className="config-section-title">상품 검색</h4>
+        <textarea
+          className="form-control"
+          style={{marginTop:8, resize:'vertical'}}
+          rows={4}
+          placeholder={'상품코드 입력 (엔터로 여러 개 입력)'}
+          value={keywordText}
+          onChange={e => setKeywordText(e.target.value)}
+        />
+      </div>
+
+      {/* 상품 수집 항목 */}
+      <div className="product-config-section active">
+        <h4 className="config-section-title">상품 수집 항목</h4>
+        <div className="field-checkbox-grid">
+          {BRAND_COLLECT_FIELDS.map(f => (
+            <label key={f.key} className={`field-checkbox ${fields.includes(f.key) ? 'checked' : ''}`}>
+              <input type="checkbox" checked={fields.includes(f.key)} onChange={() => toggleField(f.key)} />
+              <span>{f.label}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:20}}>
+        <button className="btn btn-primary" onClick={handleSaveConfig} disabled={saving}>
+          {saving ? '저장 중...' : '저장'}
+        </button>
+      </div>
+    </>
+  )
+}
+
+
 /* ─── 체크 상태 → crawl_config 변환 ─── */
 function buildCrawlConfig(agentType, checked) {
   if (agentType === 'product') {
@@ -2690,6 +2990,10 @@ function buildCrawlConfig(agentType, checked) {
       max_items: 0,
     }
   }
+  if (agentType === 'local') {
+    const collect_fields = Object.entries(checked.fields).filter(([,v]) => v).map(([k]) => k)
+    return { collect_fields }
+  }
   return {}
 }
 
@@ -2703,13 +3007,14 @@ function AddSiteModal({ categories, onClose, onSaved, showConfirm, closeConfirm 
     if (c === '경쟁사배너') return 'banner'
     if (c === '브랜드목록') return 'directory'
     if (c === '주문서') return 'order'
+    if (c === '로컬') return 'local'
     return 'product'
   }
 
   const AGENT_TYPE_LABELS = {
     product: '상품 수집', news: '뉴스 기사', cafe: '카페 게시글',
     promotion: '이벤트 수집', banner: '배너 수집', directory: '목록 수집',
-    order: '주문서 수집',
+    order: '주문서 수집', local: '로컬 수집',
   }
 
   const initCat = categories[0] || ''

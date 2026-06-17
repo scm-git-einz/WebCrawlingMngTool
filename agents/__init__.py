@@ -20,16 +20,20 @@ from agents.promotion.engine import PromotionAgent
 from agents.banner.engine import BannerAgent
 from agents.directory.engine import DirectoryAgent
 from agents.order.engine import OrderAgent
+from agents.brand.dispatcher import BrandDispatcher
+from agents.local.dispatcher import LocalDispatcher
 
 
 AGENT_REGISTRY = {
-    "product": ProductAgent,
-    "news": NewsAgent,
-    "cafe": CafeAgent,
+    "product":   ProductAgent,
+    "news":      NewsAgent,
+    "cafe":      CafeAgent,
     "promotion": PromotionAgent,
-    "banner": BannerAgent,
+    "banner":    BannerAgent,
     "directory": DirectoryAgent,
-    "order": OrderAgent,
+    "order":     OrderAgent,
+    "brand":     BrandDispatcher,
+    "local":     LocalDispatcher,
 }
 
 
