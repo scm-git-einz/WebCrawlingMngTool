@@ -996,7 +996,7 @@ function CredentialManager({ siteId, credentials: initialCreds, showConfirm, clo
 
 function ConfigModal({ site, onClose, onSaved, showConfirm, closeConfirm, agentFieldDefs }) {
   const agentType = site.agent_type
-  const modalWidth = agentType === 'news' ? 560 : agentType === 'product' ? 580 : agentType === 'order' ? 600 : agentType === 'coupon' ? 580 : 520
+  const modalWidth = agentType === 'news' ? 560 : agentType === 'product' ? 580 : agentType === 'order' ? 600 : agentType === 'coupon' ? 580 : agentType === 'brand' ? 560 : agentType === 'local' ? 520 : 520
 
   const [editInfo, setEditInfo] = useState({ name: site.name, url: site.url })
   const [infoEditing, setInfoEditing] = useState(false)
@@ -1112,6 +1112,8 @@ function ConfigModal({ site, onClose, onSaved, showConfirm, closeConfirm, agentF
           {agentType === 'directory' && <DirectoryConfig site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} fieldDefs={agentFieldDefs['directory'] || []} />}
           {agentType === 'order'     && <OrderConfig     site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} fieldDefs={agentFieldDefs['order'] || []} />}
           {agentType === 'coupon'    && <CouponConfig    site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
+          {agentType === 'brand'     && <BrandConfig     site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
+          {agentType === 'local'     && <LocalConfig     site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
           <CredentialManager siteId={site.id} credentials={site.credentials} showConfirm={showConfirm} closeConfirm={closeConfirm} />
         </div>
       </div>
