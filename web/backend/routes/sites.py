@@ -663,3 +663,35 @@ def toggle_site(site_id: int):
             return {"is_active": True, "message": "활성화되었습니다"}
     finally:
         db.close()
+
+
+class UrlCheckRequest(BaseModel):
+    url_template: str
+    keyword: str
+
+
+@router.post("/sites/{site_id}/check-url")
+def check_product_url(site_id: int, body: UrlCheckRequest):
+    """상품 상세 URL 템플릿에 키워드를 대입하여 접속 가능 여부를 확인한다."""
+    import urllib.request
+    import urllib.error
+
+    url = body.url_template.replace("{keyword}", body.keyword).replace("{sku}", body.keyword)
+    if not url.startswith("http"):
+        return {"ok": False, "url": url, "message": "유효하지 않은 URL 형식입니다"}
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            status = resp.status
+            if status == 200:
+                return {"ok": True, "url": url, "message": f"연결 성공 (HTTP {status})"}
+            return {"ok": False, "url": url, "message": f"연결 실패 (HTTP {status})"}
+    except urllib.error.HTTPError as e:
+        return {"ok": False, "url": url, "message": f"HTTP 오류: {e.code} {e.reason}"}
+    except urllib.error.URLError as e:
+        return {"ok": False, "url": url, "message": f"연결 오류: {e.reason}"}
+    except Exception as e:
+        return {"ok": False, "url": url, "message": f"오류: {str(e)}"}

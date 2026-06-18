@@ -1016,6 +1016,100 @@ function orderRowFields(r) {
   }
 }
 
+/* ── brand: 브랜드 공식홈 가격 결과 ─────────────────── */
+const BRAND_FIELD_META = {
+  brand:          { label: '브랜드',          align: 'left' },
+  name:           { label: '상품명',           align: 'left' },
+  original_price: { label: '정상가격(원화)',   align: 'right' },
+  reference_no:   { label: 'Ref No',           align: 'left' },
+  is_new:         { label: '신제품여부',        align: 'center' },
+  category:       { label: '카테고리',          align: 'left' },
+}
+
+function BrandDetail({ detail }) {
+  const results = detail.products || []
+  const success = results.filter(r => !r.error)
+  const collectFields = (detail.crawl_config || {}).collect_fields || ['brand', 'name', 'original_price']
+
+  return (
+    <>
+      <div style={{display:'flex',gap:24,marginBottom:16,fontSize:13,color:'var(--text-secondary)'}}>
+        <span>조회: <strong>{results.length}</strong>건</span>
+        <span>수집 성공: <strong style={{color:'var(--success)'}}>{success.length}</strong>건</span>
+      </div>
+
+      {results.length > 0 ? (
+        <div className="product-table-scroll">
+          <table className="price-table">
+            <thead>
+              <tr>
+                <th style={{width:36}}>#</th>
+                <th style={{minWidth:100}}>검색어</th>
+                {collectFields.map(key => {
+                  const meta = BRAND_FIELD_META[key]
+                  if (!meta) return null
+                  return (
+                    <th key={key} style={{minWidth: key === 'name' ? 200 : 90, textAlign: meta.align}}>
+                      {meta.label}
+                    </th>
+                  )
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {results.map((r, i) => {
+                const hasError = !!r.error
+                return (
+                  <tr key={i} style={hasError ? {opacity:0.45} : {}}>
+                    <td style={{color:'var(--text-secondary)'}}>{i + 1}</td>
+                    <td>{r.sku || '-'}</td>
+                    {collectFields.map(key => {
+                      if (!BRAND_FIELD_META[key]) return null
+                      const align = BRAND_FIELD_META[key].align
+                      if (key === 'name') return (
+                        <td key={key} style={{maxWidth:280,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                          {r.url ? (
+                            <a href={r.url} target="_blank" rel="noreferrer"
+                              style={{color:'var(--primary)',textDecoration:'none'}} title={r.url}>
+                              {r.name || r.sku || '-'}
+                            </a>
+                          ) : (
+                            r.name || (hasError ? <span style={{color:'var(--danger)',fontSize:11}}>{r.error}</span> : '-')
+                          )}
+                        </td>
+                      )
+                      if (key === 'is_new') return (
+                        <td key={key} style={{textAlign:'center'}}>
+                          {r.is_new != null ? (r.is_new ? '✓' : '-') : '-'}
+                        </td>
+                      )
+                      if (key === 'original_price') return (
+                        <td key={key} style={{textAlign:'right'}}>
+                          {r.original_price || r.price
+                            ? Number(String(r.original_price || r.price).replace(/,/g, '')).toLocaleString('ko-KR')
+                            : '-'}
+                        </td>
+                      )
+                      return (
+                        <td key={key} style={{textAlign: align}}>
+                          {r[key] != null && r[key] !== '' ? String(r[key]) : '-'}
+                        </td>
+                      )
+                    })}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="empty-state">수집된 가격 정보가 없습니다</div>
+      )}
+    </>
+  )
+}
+
+
 function OrderDetail({ detail }) {
   const results = detail.items || []
   const storeInfo = detail.store_info || {}

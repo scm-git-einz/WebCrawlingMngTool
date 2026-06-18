@@ -25,11 +25,11 @@ from agents.coupon.engine import CouponAgent
 
 
 AGENT_REGISTRY = {
-    "product": ProductAgent,
-    "news": NewsAgent,
-    "cafe": CafeAgent,
+    "product":   ProductAgent,
+    "news":      NewsAgent,
+    "cafe":      CafeAgent,
     "promotion": PromotionAgent,
-    "banner": BannerAgent,
+    "banner":    BannerAgent,
     "directory": DirectoryAgent,
     "order": OrderAgent,
     "coupon": CouponAgent,
