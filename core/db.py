@@ -299,6 +299,19 @@ class CrawlDB:
             ("coupon", "event_coupons",   "이벤트쿠폰",  "event_coupons",   1),
             ("coupon", "auto_discovery",  "자동탐색",     "auto_discovery",  2),
             ("coupon", "coupon_keywords", "쿠폰키워드",  "coupon_keywords", 3),
+
+            ("local", "brand",            "브랜드",        "collect_fields", 1),
+            ("local", "name",             "상품명",        "collect_fields", 2),
+            ("local", "regular_price",    "정상가격(원화)", "collect_fields", 3),
+            ("local", "discount_rate",    "할인율",        "collect_fields", 4),
+            ("local", "discounted_price", "할인가격(원화)", "collect_fields", 5),
+
+            ("brand", "brand",          "브랜드",        "collect_fields", 1),
+            ("brand", "name",           "상품명",        "collect_fields", 2),
+            ("brand", "original_price", "정상가격(원화)", "collect_fields", 3),
+            ("brand", "reference_no",   "Ref No",        "collect_fields", 4),
+            ("brand", "is_new",         "신제품여부",    "collect_fields", 5),
+            ("brand", "category",       "카테고리",      "collect_fields", 6),
         ]
 
         for s in seeds:
