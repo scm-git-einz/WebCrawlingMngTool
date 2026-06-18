@@ -2,15 +2,18 @@
 PostgreSQL DB 연동 모듈
 
 테이블:
-  - crawl_sites:           현업 담당자가 등록하는 수집 대상 사이트
-  - platforms:             플랫폼 정의 (감지 규칙 + 브라우저 설정)
-  - extraction_templates:  플랫폼별 추출 템플릿
-  - crawl_results:         수집 모니터링 (상태/건수/소요시간/에러)
-  - crawl_data:            수집 원시 데이터 (메달리온 Bronze 레이어)
-  - news_keywords:         뉴스 검색 키워드 (사이트별, 활성/비활성)
-  - site_credentials:      사이트별 로그인 계정 (복수 계정, 로테이션 지원)
-  - ocr_usage_log:         OCR/Document Parser API 사용 이력
-  - llm_usage:             LLM API 토큰 사용량 추적
+  - crawl_sites:                수집 대상 사이트
+  - crawl_platforms:            플랫폼 정의 (감지 규칙 + 브라우저 설정)
+  - crawl_extraction_templates: 플랫폼별 추출 템플릿
+  - crawl_results:              수집 모니터링 (상태/건수/소요시간/에러)
+  - crawl_data:                 수집 원시 데이터 (메달리온 Bronze 레이어)
+  - crawl_news_keywords:        뉴스 검색 키워드 (사이트별, 활성/비활성)
+  - crawl_site_credentials:     사이트별 로그인 계정 (복수 계정, 로테이션 지원)
+  - crawl_ocr_usage_log:        OCR/Document Parser API 사용 이력
+  - crawl_llm_usage:            LLM API 토큰 사용량 추적
+  - crawl_system_codes:         시스템 코드 (카테고리, 에이전트 타입, 상태 등)
+  - crawl_agent_field_defs:     에이전트별 수집 필드 정의
+  - crawl_failure_log:          수집 실패 상세 로그
 """
 import json
 import os
@@ -59,7 +62,7 @@ class CrawlDB:
         cur = self._cur()
 
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS platforms (
+            CREATE TABLE IF NOT EXISTS crawl_platforms (
                 id           SERIAL       PRIMARY KEY,
                 name         TEXT         NOT NULL UNIQUE,
                 display_name TEXT         NOT NULL,
@@ -71,9 +74,9 @@ class CrawlDB:
         """)
 
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS extraction_templates (
+            CREATE TABLE IF NOT EXISTS crawl_extraction_templates (
                 id           SERIAL       PRIMARY KEY,
-                platform_id  INTEGER      NOT NULL REFERENCES platforms(id),
+                platform_id  INTEGER      NOT NULL REFERENCES crawl_platforms(id),
                 target       TEXT         NOT NULL,
                 strategy     TEXT         NOT NULL,
                 config       JSONB        NOT NULL DEFAULT '{}',
@@ -87,7 +90,7 @@ class CrawlDB:
                 site_name      TEXT         NOT NULL,
                 site_url       TEXT         NOT NULL,
                 is_active      SMALLINT     NOT NULL DEFAULT 1,
-                platform_id    INTEGER      REFERENCES platforms(id),
+                platform_id    INTEGER      REFERENCES crawl_platforms(id),
                 agent_type     TEXT         NOT NULL DEFAULT 'product',
                 crawl_config   JSONB        NOT NULL DEFAULT '{}',
                 category       TEXT         NOT NULL DEFAULT '',
@@ -98,7 +101,7 @@ class CrawlDB:
         """)
 
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS news_keywords (
+            CREATE TABLE IF NOT EXISTS crawl_news_keywords (
                 id           SERIAL       PRIMARY KEY,
                 site_id      INTEGER      NOT NULL REFERENCES crawl_sites(id),
                 keyword      TEXT         NOT NULL,
@@ -121,7 +124,7 @@ class CrawlDB:
         """)
 
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS ocr_usage_log (
+            CREATE TABLE IF NOT EXISTS crawl_ocr_usage_log (
                 id            SERIAL       PRIMARY KEY,
                 site_id       INTEGER      NOT NULL REFERENCES crawl_sites(id),
                 post_id       TEXT,
@@ -137,7 +140,7 @@ class CrawlDB:
         """)
 
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS llm_usage (
+            CREATE TABLE IF NOT EXISTS crawl_llm_usage (
                 id                SERIAL           PRIMARY KEY,
                 site_id           INTEGER          REFERENCES crawl_sites(id),
                 agent_type        TEXT             NOT NULL,
@@ -155,7 +158,7 @@ class CrawlDB:
         """)
 
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS agent_field_defs (
+            CREATE TABLE IF NOT EXISTS crawl_agent_field_defs (
                 id           SERIAL       PRIMARY KEY,
                 agent_type   TEXT         NOT NULL,
                 field_key    TEXT         NOT NULL,
@@ -202,7 +205,22 @@ class CrawlDB:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_crawl_data_site ON crawl_data(site_id)")
 
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS site_credentials (
+            CREATE TABLE IF NOT EXISTS crawl_system_codes (
+                id          SERIAL       PRIMARY KEY,
+                group_code  TEXT         NOT NULL,
+                code        TEXT         NOT NULL,
+                label       TEXT         NOT NULL,
+                extra       JSONB        NOT NULL DEFAULT '{}',
+                sort_order  INTEGER      NOT NULL DEFAULT 0,
+                is_active   SMALLINT     NOT NULL DEFAULT 1,
+                created_at  TIMESTAMP    NOT NULL DEFAULT NOW(),
+                UNIQUE(group_code, code)
+            )
+        """)
+        self._seed_system_codes(cur)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS crawl_site_credentials (
                 id           SERIAL       PRIMARY KEY,
                 site_id      INTEGER      NOT NULL REFERENCES crawl_sites(id),
                 login_id     TEXT         NOT NULL,
@@ -217,11 +235,84 @@ class CrawlDB:
         self.conn.commit()
 
     # ═══════════════════════════════════════════════════════════════
+    # system_codes 시드
+    # ═══════════════════════════════════════════════════════════════
+
+    def _seed_system_codes(self, cur):
+        cur.execute("SELECT COUNT(*) AS cnt FROM crawl_system_codes")
+        if cur.fetchone()["cnt"] > 0:
+            return
+
+        codes = [
+            # ── agent_type ──
+            ("agent_type", "product",   "상품 수집",     {"badge_class": "dp"},           10),
+            ("agent_type", "news",      "뉴스 기사",     {"badge_class": "pending"},      20),
+            ("agent_type", "cafe",      "카페 게시글",   {"badge_class": "tess"},         30),
+            ("agent_type", "promotion", "이벤트 수집",   {"badge_class": "promo"},        40),
+            ("agent_type", "banner",    "배너 수집",     {"badge_class": "banner-badge"}, 50),
+            ("agent_type", "directory", "목록 수집",     {"badge_class": "dir-badge"},    60),
+            ("agent_type", "order",     "주문서 수집",   {"badge_class": "order-badge"},  70),
+            ("agent_type", "coupon",    "쿠폰 다운로드", {"badge_class": "coupon-badge"}, 80),
+
+            # ── category (agent_type 매핑 포함) ──
+            ("category", "트렌드매장",       "트렌드매장",       {"icon": "\U0001f6cd️", "color": "#3b82f6", "agent_type": "product"},   10),
+            ("category", "트렌드Global매장", "트렌드Global매장", {"icon": "\U0001f30d",       "color": "#8b5cf6", "agent_type": "product"},   20),
+            ("category", "경쟁사",           "경쟁사",           {"icon": "\U0001f3e2",       "color": "#ef4444", "agent_type": "product"},   30),
+            ("category", "경쟁사중국",       "경쟁사중국",       {"icon": "\U0001f1e8\U0001f1f3", "color": "#f97316", "agent_type": "product"}, 40),
+            ("category", "경쟁사이벤트",     "경쟁사이벤트",     {"icon": "\U0001f389",       "color": "#ec4899", "agent_type": "promotion"}, 50),
+            ("category", "브랜드공식",       "브랜드공식",       {"icon": "⭐",           "color": "#eab308", "agent_type": "product"},   60),
+            ("category", "네이버스토어",     "네이버스토어",     {"icon": "\U0001f4e6",       "color": "#22c55e", "agent_type": "product"},   70),
+            ("category", "당사온라인몰",     "당사온라인몰",     {"icon": "\U0001f3e0",       "color": "#06b6d4", "agent_type": "product"},   80),
+            ("category", "경쟁사배너",       "경쟁사배너",       {"icon": "\U0001f5bc️", "color": "#f43f5e", "agent_type": "banner"},    90),
+            ("category", "브랜드목록",       "브랜드목록",       {"icon": "\U0001f4cb",       "color": "#0ea5e9", "agent_type": "directory"}, 100),
+            ("category", "뉴스",             "뉴스",             {"icon": "\U0001f4f0",       "color": "#64748b", "agent_type": "news"},      110),
+            ("category", "카페",             "카페",             {"icon": "☕",           "color": "#a855f7", "agent_type": "cafe"},      120),
+            ("category", "주문서",           "주문서",           {"icon": "\U0001f4b3",       "color": "#059669", "agent_type": "order"},     130),
+            ("category", "쿠폰",             "쿠폰",             {"icon": "\U0001f3ab",       "color": "#d97706", "agent_type": "coupon"},    140),
+
+            # ── crawl_status ──
+            ("crawl_status", "pending", "대기",   {"badge_class": "pending"}, 10),
+            ("crawl_status", "running", "실행중", {"badge_class": "running"}, 20),
+            ("crawl_status", "success", "성공",   {"badge_class": "success"}, 30),
+            ("crawl_status", "failed",  "실패",   {"badge_class": "failed"},  40),
+            ("crawl_status", "error",   "오류",   {"badge_class": "failed"},  50),
+        ]
+
+        for group_code, code, label, extra, sort_order in codes:
+            cur.execute(
+                "INSERT INTO crawl_system_codes (group_code, code, label, extra, sort_order) "
+                "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (group_code, code) DO NOTHING",
+                (group_code, code, label, json.dumps(extra, ensure_ascii=False), sort_order),
+            )
+
+    def get_system_codes(self, group_code: str = None) -> list:
+        cur = self._cur()
+        if group_code:
+            cur.execute(
+                "SELECT group_code, code, label, extra, sort_order, is_active "
+                "FROM crawl_system_codes WHERE group_code = %s ORDER BY sort_order",
+                (group_code,),
+            )
+        else:
+            cur.execute(
+                "SELECT group_code, code, label, extra, sort_order, is_active "
+                "FROM crawl_system_codes ORDER BY group_code, sort_order"
+            )
+        rows = cur.fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            if isinstance(d["extra"], str):
+                d["extra"] = json.loads(d["extra"])
+            result.append(d)
+        return result
+
+    # ═══════════════════════════════════════════════════════════════
     # agent_field_defs 시드 / CRUD
     # ═══════════════════════════════════════════════════════════════
 
     def _seed_agent_field_defs(self, cur):
-        cur.execute("SELECT COUNT(*) AS cnt FROM agent_field_defs")
+        cur.execute("SELECT COUNT(*) AS cnt FROM crawl_agent_field_defs")
         if cur.fetchone()["cnt"] > 0:
             return
 
@@ -316,7 +407,7 @@ class CrawlDB:
 
         for s in seeds:
             cur.execute(
-                "INSERT INTO agent_field_defs "
+                "INSERT INTO crawl_agent_field_defs "
                 "(agent_type, field_key, label, config_key, sort_order) "
                 "VALUES (%s, %s, %s, %s, %s) "
                 "ON CONFLICT (agent_type, field_key) DO NOTHING",
@@ -327,14 +418,14 @@ class CrawlDB:
         cur = self._cur()
         if agent_type:
             cur.execute(
-                "SELECT * FROM agent_field_defs "
+                "SELECT * FROM crawl_agent_field_defs "
                 "WHERE agent_type = %s AND is_active = 1 "
                 "ORDER BY sort_order",
                 (agent_type,),
             )
         else:
             cur.execute(
-                "SELECT * FROM agent_field_defs "
+                "SELECT * FROM crawl_agent_field_defs "
                 "WHERE is_active = 1 "
                 "ORDER BY agent_type, sort_order",
             )
@@ -346,7 +437,7 @@ class CrawlDB:
     ) -> int:
         cur = self._cur()
         cur.execute(
-            "INSERT INTO agent_field_defs "
+            "INSERT INTO crawl_agent_field_defs "
             "(agent_type, field_key, label, config_key, sort_order) "
             "VALUES (%s, %s, %s, %s, %s) "
             "ON CONFLICT (agent_type, field_key) DO UPDATE SET "
@@ -362,7 +453,7 @@ class CrawlDB:
     def delete_agent_field_def(self, agent_type: str, field_key: str):
         cur = self._cur()
         cur.execute(
-            "UPDATE agent_field_defs SET is_active = 0 "
+            "UPDATE crawl_agent_field_defs SET is_active = 0 "
             "WHERE agent_type = %s AND field_key = %s",
             (agent_type, field_key),
         )
@@ -479,7 +570,7 @@ class CrawlDB:
     def add_platform(self, platform_data: dict) -> int:
         cur = self._cur()
         cur.execute(
-            "INSERT INTO platforms (name, display_name, detection, browser) "
+            "INSERT INTO crawl_platforms (name, display_name, detection, browser) "
             "VALUES (%s, %s, %s, %s) RETURNING id",
             (
                 platform_data["name"],
@@ -494,7 +585,7 @@ class CrawlDB:
 
     def get_platform(self, platform_id: int) -> dict | None:
         cur = self._cur()
-        cur.execute("SELECT * FROM platforms WHERE id = %s", (platform_id,))
+        cur.execute("SELECT * FROM crawl_platforms WHERE id = %s", (platform_id,))
         row = cur.fetchone()
         if not row:
             return None
@@ -507,7 +598,7 @@ class CrawlDB:
 
     def get_platform_by_name(self, name: str) -> dict | None:
         cur = self._cur()
-        cur.execute("SELECT * FROM platforms WHERE name = %s", (name,))
+        cur.execute("SELECT * FROM crawl_platforms WHERE name = %s", (name,))
         row = cur.fetchone()
         if not row:
             return None
@@ -520,7 +611,7 @@ class CrawlDB:
 
     def get_all_platforms(self) -> list[dict]:
         cur = self._cur()
-        cur.execute("SELECT * FROM platforms WHERE is_active = 1 ORDER BY id")
+        cur.execute("SELECT * FROM crawl_platforms WHERE is_active = 1 ORDER BY id")
         result = []
         for row in cur.fetchall():
             d = dict(row)
@@ -585,7 +676,7 @@ class CrawlDB:
     def add_template(self, platform_id: int, template_data: dict) -> int:
         cur = self._cur()
         cur.execute(
-            "INSERT INTO extraction_templates "
+            "INSERT INTO crawl_extraction_templates "
             "(platform_id, target, strategy, config, priority) "
             "VALUES (%s, %s, %s, %s, %s) RETURNING id",
             (
@@ -603,7 +694,7 @@ class CrawlDB:
     def get_templates_for_platform(self, platform_id: int) -> list[dict]:
         cur = self._cur()
         cur.execute(
-            "SELECT * FROM extraction_templates "
+            "SELECT * FROM crawl_extraction_templates "
             "WHERE platform_id = %s ORDER BY target, priority DESC",
             (platform_id,),
         )
@@ -618,7 +709,7 @@ class CrawlDB:
     def get_template(self, platform_id: int, target: str) -> dict | None:
         cur = self._cur()
         cur.execute(
-            "SELECT * FROM extraction_templates "
+            "SELECT * FROM crawl_extraction_templates "
             "WHERE platform_id = %s AND target = %s ORDER BY priority DESC LIMIT 1",
             (platform_id, target),
         )
@@ -633,7 +724,7 @@ class CrawlDB:
     def delete_templates_for_platform(self, platform_id: int):
         cur = self._cur()
         cur.execute(
-            "DELETE FROM extraction_templates WHERE platform_id = %s",
+            "DELETE FROM crawl_extraction_templates WHERE platform_id = %s",
             (platform_id,),
         )
         self.conn.commit()
@@ -766,7 +857,7 @@ class CrawlDB:
     def add_keyword(self, site_id: int, keyword: str) -> int | None:
         cur = self._cur()
         cur.execute(
-            "SELECT id, is_active FROM news_keywords "
+            "SELECT id, is_active FROM crawl_news_keywords "
             "WHERE site_id = %s AND keyword = %s",
             (site_id, keyword),
         )
@@ -774,13 +865,13 @@ class CrawlDB:
         if row:
             if not row["is_active"]:
                 cur.execute(
-                    "UPDATE news_keywords SET is_active = 1 WHERE id = %s",
+                    "UPDATE crawl_news_keywords SET is_active = 1 WHERE id = %s",
                     (row["id"],),
                 )
                 self.conn.commit()
             return None
         cur.execute(
-            "INSERT INTO news_keywords (site_id, keyword) "
+            "INSERT INTO crawl_news_keywords (site_id, keyword) "
             "VALUES (%s, %s) RETURNING id",
             (site_id, keyword),
         )
@@ -802,7 +893,7 @@ class CrawlDB:
     def remove_keyword(self, site_id: int, keyword: str) -> bool:
         cur = self._cur()
         cur.execute(
-            "DELETE FROM news_keywords WHERE site_id = %s AND keyword = %s",
+            "DELETE FROM crawl_news_keywords WHERE site_id = %s AND keyword = %s",
             (site_id, keyword),
         )
         deleted = cur.rowcount > 0
@@ -812,7 +903,7 @@ class CrawlDB:
     def get_keywords(self, site_id: int) -> list[dict]:
         cur = self._cur()
         cur.execute(
-            "SELECT * FROM news_keywords "
+            "SELECT * FROM crawl_news_keywords "
             "WHERE site_id = %s ORDER BY id",
             (site_id,),
         )
@@ -821,7 +912,7 @@ class CrawlDB:
     def get_active_keywords(self, site_id: int) -> list[str]:
         cur = self._cur()
         cur.execute(
-            "SELECT keyword FROM news_keywords "
+            "SELECT keyword FROM crawl_news_keywords "
             "WHERE site_id = %s AND is_active = 1 ORDER BY id",
             (site_id,),
         )
@@ -832,7 +923,7 @@ class CrawlDB:
     ) -> bool:
         cur = self._cur()
         cur.execute(
-            "UPDATE news_keywords SET is_active = %s "
+            "UPDATE crawl_news_keywords SET is_active = %s "
             "WHERE site_id = %s AND keyword = %s",
             (1 if is_active else 0, site_id, keyword),
         )
@@ -861,7 +952,7 @@ class CrawlDB:
     ) -> int:
         cur = self._cur()
         cur.execute(
-            "INSERT INTO site_credentials (site_id, login_id, login_pwd, label) "
+            "INSERT INTO crawl_site_credentials (site_id, login_id, login_pwd, label) "
             "VALUES (%s, %s, %s, %s) RETURNING id",
             (site_id, login_id, login_pwd, label),
         )
@@ -872,7 +963,7 @@ class CrawlDB:
     def get_credentials(self, site_id: int) -> list[dict]:
         cur = self._cur()
         cur.execute(
-            "SELECT * FROM site_credentials "
+            "SELECT * FROM crawl_site_credentials "
             "WHERE site_id = %s ORDER BY id",
             (site_id,),
         )
@@ -881,7 +972,7 @@ class CrawlDB:
     def get_active_credentials(self, site_id: int) -> list[dict]:
         cur = self._cur()
         cur.execute(
-            "SELECT * FROM site_credentials "
+            "SELECT * FROM crawl_site_credentials "
             "WHERE site_id = %s AND is_active = 1 "
             "ORDER BY last_used_at ASC NULLS FIRST, id ASC",
             (site_id,),
@@ -893,7 +984,7 @@ class CrawlDB:
     ) -> bool:
         cur = self._cur()
         cur.execute(
-            "UPDATE site_credentials "
+            "UPDATE crawl_site_credentials "
             "SET login_id = %s, login_pwd = %s, label = %s WHERE id = %s",
             (login_id, login_pwd, label, cred_id),
         )
@@ -904,7 +995,7 @@ class CrawlDB:
     def delete_credential(self, cred_id: int) -> bool:
         cur = self._cur()
         cur.execute(
-            "DELETE FROM site_credentials WHERE id = %s", (cred_id,),
+            "DELETE FROM crawl_site_credentials WHERE id = %s", (cred_id,),
         )
         deleted = cur.rowcount > 0
         self.conn.commit()
@@ -912,13 +1003,13 @@ class CrawlDB:
 
     def toggle_credential(self, cred_id: int) -> dict | None:
         cur = self._cur()
-        cur.execute("SELECT id, is_active FROM site_credentials WHERE id = %s", (cred_id,))
+        cur.execute("SELECT id, is_active FROM crawl_site_credentials WHERE id = %s", (cred_id,))
         row = cur.fetchone()
         if not row:
             return None
         new_active = 0 if row["is_active"] else 1
         cur.execute(
-            "UPDATE site_credentials SET is_active = %s WHERE id = %s",
+            "UPDATE crawl_site_credentials SET is_active = %s WHERE id = %s",
             (new_active, cred_id),
         )
         self.conn.commit()
@@ -927,7 +1018,7 @@ class CrawlDB:
     def mark_credential_used(self, cred_id: int):
         cur = self._cur()
         cur.execute(
-            "UPDATE site_credentials SET last_used_at = %s WHERE id = %s",
+            "UPDATE crawl_site_credentials SET last_used_at = %s WHERE id = %s",
             (_now(), cred_id),
         )
         self.conn.commit()
@@ -950,7 +1041,7 @@ class CrawlDB:
     ) -> int:
         cur = self._cur()
         cur.execute(
-            "INSERT INTO ocr_usage_log "
+            "INSERT INTO crawl_ocr_usage_log "
             "(site_id, post_id, image_url, engine, status, "
             " text_length, price_count, elapsed_ms, error_msg) "
             "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
@@ -986,7 +1077,7 @@ class CrawlDB:
                 ROUND(AVG(elapsed_ms))                      AS avg_elapsed_ms,
                 MIN(created_at)                             AS first_used,
                 MAX(created_at)                             AS last_used
-            FROM ocr_usage_log
+            FROM crawl_ocr_usage_log
             {where}
             GROUP BY engine
             ORDER BY total DESC
@@ -1000,7 +1091,7 @@ class CrawlDB:
         where = "WHERE site_id = %s" if site_id else ""
         params = (site_id, limit) if site_id else (limit,)
         cur.execute(f"""
-            SELECT * FROM ocr_usage_log
+            SELECT * FROM crawl_ocr_usage_log
             {where}
             ORDER BY id DESC
             LIMIT %s
@@ -1027,7 +1118,7 @@ class CrawlDB:
         total = prompt_tokens + completion_tokens
         cur = self._cur()
         cur.execute(
-            "INSERT INTO llm_usage "
+            "INSERT INTO crawl_llm_usage "
             "(site_id, agent_type, task_type, model, "
             " prompt_tokens, completion_tokens, total_tokens, cost_usd, "
             " input_preview, output_preview, elapsed_ms) "
@@ -1062,7 +1153,7 @@ class CrawlDB:
                 COALESCE(SUM(cost_usd), 0)          AS total_cost_usd,
                 MIN(created_at)            AS first_used,
                 MAX(created_at)            AS last_used
-            FROM llm_usage
+            FROM crawl_llm_usage
         """)
         summary = dict(cur.fetchone())
 
@@ -1074,7 +1165,7 @@ class CrawlDB:
                 SUM(completion_tokens)     AS completion_tokens,
                 SUM(total_tokens)          AS total_tokens,
                 SUM(cost_usd)              AS cost_usd
-            FROM llm_usage
+            FROM crawl_llm_usage
             GROUP BY agent_type
             ORDER BY total_tokens DESC
         """)
@@ -1088,7 +1179,7 @@ class CrawlDB:
                 SUM(completion_tokens)     AS completion_tokens,
                 SUM(total_tokens)          AS total_tokens,
                 SUM(cost_usd)              AS cost_usd
-            FROM llm_usage
+            FROM crawl_llm_usage
             GROUP BY task_type
             ORDER BY total_tokens DESC
         """)
@@ -1102,7 +1193,7 @@ class CrawlDB:
                 SUM(completion_tokens)     AS completion_tokens,
                 SUM(total_tokens)          AS total_tokens,
                 SUM(cost_usd)              AS cost_usd
-            FROM llm_usage
+            FROM crawl_llm_usage
             GROUP BY model
             ORDER BY total_tokens DESC
         """)
@@ -1116,7 +1207,7 @@ class CrawlDB:
                 SUM(completion_tokens)     AS completion_tokens,
                 SUM(total_tokens)          AS total_tokens,
                 SUM(cost_usd)              AS cost_usd
-            FROM llm_usage
+            FROM crawl_llm_usage
             WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
             GROUP BY DATE(created_at)
             ORDER BY date
@@ -1148,7 +1239,7 @@ class CrawlDB:
         params.append(limit)
         cur.execute(f"""
             SELECT l.*, s.site_name
-            FROM llm_usage l
+            FROM crawl_llm_usage l
             LEFT JOIN crawl_sites s ON l.site_id = s.id
             {where}
             ORDER BY l.id DESC
@@ -1313,7 +1404,7 @@ class CrawlDB:
             self.delete_templates_for_platform(platform_id)
             cur = self._cur()
             cur.execute(
-                "UPDATE platforms SET browser = %s, detection = %s "
+                "UPDATE crawl_platforms SET browser = %s, detection = %s "
                 "WHERE id = %s",
                 (
                     json.dumps(

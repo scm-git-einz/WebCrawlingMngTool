@@ -2224,3 +2224,49 @@ CREATE TABLE agent_field_defs (
 - `web/frontend/src/pages/CrawlResults.jsx` (detail.products → detail.items, 8개 컴포넌트)
 - `main.py` (CLI 결과 조회 필드명 변경)
 - `web/PROGRESS.md` (Phase 35 기록)
+
+### Phase 36. 환경변수 관리 + 수집주기 개선 + 시스템 코드 테이블
+> .env 환경변수 통합, 수집주기 타입 기반 UI, 코드 테이블 DB 관리
+
+**사용자 요청**: 하드코딩 IP를 .env로 통합, 수집주기를 crontab 스타일로 개선, 코드성 데이터를 시스템 코드 테이블로 관리
+
+**작업 내역**:
+1. **환경변수 관리 (.env)**
+   - `SERVER_HOST`, `SERVER_PORT`, `WEB_PORT`, `API_HOST`, `DB_HOST` 등 .env에서 관리
+   - `core/db.py`, `web/start_web.py`, `web/frontend/vite.config.js` — .env 기반으로 변경
+   - `.env.example` 업데이트
+
+2. **수집주기 UI 개선**
+   - 타입 기반 계단식 입력: 미설정 / 수시 / 매 N시간 / 매일 / 매주 / 매월
+   - 각 타입별 세부 설정: 간격, 시각, 요일, 일자
+   - 저장 형식: `""`, `"adhoc"`, `"hourly:6"`, `"daily:9"`, `"weekly:1:9"`, `"monthly:15:9"`
+   - 변경 시 ✓/✕ 버튼으로 확인 후 ConfirmModal
+
+3. **상태 아이콘 변경**
+   - 활성/비활성 토글을 🟢/🔴 아이콘 버튼으로 변경
+
+4. **시스템 코드 테이블 (`system_codes`)**
+   - `core/db.py`: 테이블 생성 + 시드 데이터 (27개 코드)
+     - `agent_type` (8종): badge_class 포함
+     - `category` (14종): icon, color, agent_type 매핑 포함
+     - `crawl_status` (5종): badge_class 포함
+   - `web/backend/routes/codes.py`: GET /api/codes, GET /api/codes/grouped API
+   - `SiteSettings.jsx`: API에서 코드 로드 → CATEGORY_LABELS, AGENT_BADGE_CLASS, AGENT_TYPE_LABELS, CATEGORY_AGENT_MAP 동적 생성
+   - `CrawlResults.jsx`: AGENT_LABELS, AGENT_BADGE_CLASS API 기반으로 변경
+   - `AddSiteModal`: agentTypeFromCategory를 코드 테이블 매핑으로 변경
+
+5. **OCR 페이지 버그 수정**
+   - `OcrUsage.jsx`: query string `?` 누락 수정 (selectedSite=0일 때 URL 오류)
+
+**수정된 파일**:
+- `core/db.py` (system_codes 테이블 + 시드 + get_system_codes)
+- `web/backend/routes/codes.py` (신규 — 코드 조회 API)
+- `web/backend/app.py` (codes 라우터 등록)
+- `web/frontend/src/pages/SiteSettings.jsx` (코드 API 연동, 하드코딩 제거, 수집주기 UI)
+- `web/frontend/src/pages/CrawlResults.jsx` (코드 API 연동)
+- `web/frontend/src/pages/OcrUsage.jsx` (버그 수정)
+- `web/frontend/src/App.css` (schedule-input, btn-status 스타일)
+- `web/frontend/vite.config.js` (.env 파싱)
+- `web/start_web.py` (환경변수 적용)
+- `.env`, `.env.example` (WEB_PORT, API_HOST 추가)
+- `web/PROGRESS.md` (Phase 36 기록)

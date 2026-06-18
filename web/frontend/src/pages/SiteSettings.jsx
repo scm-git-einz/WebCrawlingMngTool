@@ -49,21 +49,36 @@ function scheduleLabel(val) {
   return val || '미설정'
 }
 
-const CATEGORY_LABELS = {
-  '트렌드매장':       { icon: '\u{1F6CD}\u{FE0F}', color: '#3b82f6' },
-  '트렌드Global매장': { icon: '\u{1F30D}', color: '#8b5cf6' },
-  '경쟁사':           { icon: '\u{1F3E2}', color: '#ef4444' },
-  '경쟁사중국':       { icon: '\u{1F1E8}\u{1F1F3}', color: '#f97316' },
-  '경쟁사이벤트':     { icon: '\u{1F389}', color: '#ec4899' },
-  '브랜드공식':       { icon: '\u{2B50}', color: '#eab308' },
-  '네이버스토어':     { icon: '\u{1F4E6}', color: '#22c55e' },
-  '당사온라인몰':     { icon: '\u{1F3E0}', color: '#06b6d4' },
-  '경쟁사배너':       { icon: '\u{1F5BC}\u{FE0F}', color: '#f43f5e' },
-  '브랜드목록':       { icon: '\u{1F4CB}', color: '#0ea5e9' },
-  '뉴스':             { icon: '\u{1F4F0}', color: '#64748b' },
-  '카페':             { icon: '\u{2615}', color: '#a855f7' },
-  '주문서':           { icon: '\u{1F4B3}', color: '#059669' },
-  '쿠폰':             { icon: '\u{1F3AB}', color: '#d97706' },
+function buildCategoryLabels(codes) {
+  const result = {}
+  codes.filter(c => c.group_code === 'category' && c.is_active).forEach(c => {
+    result[c.code] = { icon: c.extra?.icon || '📁', color: c.extra?.color || '#64748b' }
+  })
+  return result
+}
+
+function buildAgentBadgeClass(codes) {
+  const result = {}
+  codes.filter(c => c.group_code === 'agent_type' && c.is_active).forEach(c => {
+    result[c.code] = c.extra?.badge_class || 'dp'
+  })
+  return result
+}
+
+function buildAgentTypeLabels(codes) {
+  const result = {}
+  codes.filter(c => c.group_code === 'agent_type' && c.is_active).forEach(c => {
+    result[c.code] = c.label
+  })
+  return result
+}
+
+function buildCategoryAgentMap(codes) {
+  const result = {}
+  codes.filter(c => c.group_code === 'category' && c.is_active).forEach(c => {
+    if (c.extra?.agent_type) result[c.code] = c.extra.agent_type
+  })
+  return result
 }
 
 
@@ -205,10 +220,15 @@ export default function SiteSettings() {
   const [filterCat, setFilterCat] = useState('')
   const [runningStatus, setRunningStatus] = useState([])
   const [runResults, setRunResults] = useState(null)
-  const [logView, setLogView] = useState(null)  // { siteId, siteName }
-  // 확인 대화상자 상태
+  const [logView, setLogView] = useState(null)
   const [confirmState, setConfirmState] = useState(null)
   const [agentFieldDefs, setAgentFieldDefs] = useState({})
+  const [systemCodes, setSystemCodes] = useState([])
+
+  const CATEGORY_LABELS = useMemo(() => buildCategoryLabels(systemCodes), [systemCodes])
+  const AGENT_BADGE_CLASS = useMemo(() => buildAgentBadgeClass(systemCodes), [systemCodes])
+  const AGENT_TYPE_LABELS = useMemo(() => buildAgentTypeLabels(systemCodes), [systemCodes])
+  const CATEGORY_AGENT_MAP = useMemo(() => buildCategoryAgentMap(systemCodes), [systemCodes])
 
   const showConfirm = ({ title, message, detail, confirmLabel, confirmType, onConfirm }) => {
     setConfirmState({ title, message, detail, confirmLabel, confirmType, onConfirm })
@@ -220,10 +240,12 @@ export default function SiteSettings() {
     Promise.all([
       fetch('/api/sites').then(r => r.json()),
       fetch('/api/agent-fields').then(r => r.json()),
+      fetch('/api/codes').then(r => r.json()),
     ])
-      .then(([data, fieldDefs]) => {
+      .then(([data, fieldDefs, codes]) => {
         setSites(data)
         setAgentFieldDefs(fieldDefs)
+        setSystemCodes(codes)
         setLoading(false)
       })
       .catch(() => setLoading(false))
@@ -616,6 +638,9 @@ export default function SiteSettings() {
           showConfirm={showConfirm}
           closeConfirm={closeConfirm}
           agentFieldDefs={agentFieldDefs}
+          categoryAgentMap={CATEGORY_AGENT_MAP}
+          agentTypeLabels={AGENT_TYPE_LABELS}
+          agentBadgeClass={AGENT_BADGE_CLASS}
         />
       )}
 
@@ -627,6 +652,7 @@ export default function SiteSettings() {
           showConfirm={showConfirm}
           closeConfirm={closeConfirm}
           agentFieldDefs={agentFieldDefs}
+          agentBadgeClass={AGENT_BADGE_CLASS}
         />
       )}
 
@@ -750,9 +776,6 @@ function LogViewerModal({ siteId, siteName, onClose }) {
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    에이전트 유형별 설정 모달
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-const AGENT_BADGE_CLASS = {
-  product: 'dp', news: 'pending', cafe: 'tess', promotion: 'promo', banner: 'banner-badge', directory: 'dir-badge', order: 'order-badge', coupon: 'coupon-badge',
-}
 
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1131,7 +1154,8 @@ function CredentialManager({ siteId, credentials: initialCreds, showConfirm, clo
 }
 
 
-function ConfigModal({ site, onClose, onSaved, showConfirm, closeConfirm, agentFieldDefs }) {
+function ConfigModal({ site, onClose, onSaved, showConfirm, closeConfirm, agentFieldDefs, agentBadgeClass }) {
+  const AGENT_BADGE_CLASS = agentBadgeClass || {}
   const agentType = site.agent_type
   const modalWidth = agentType === 'news' ? 560 : agentType === 'product' ? 580 : agentType === 'order' ? 600 : agentType === 'coupon' ? 580 : agentType === 'brand' ? 560 : agentType === 'local' ? 520 : 520
 
@@ -3776,27 +3800,16 @@ function buildCrawlConfig(agentType, checked) {
 }
 
 
-function AddSiteModal({ categories, onClose, onSaved, showConfirm, closeConfirm, agentFieldDefs }) {
+function AddSiteModal({ categories, onClose, onSaved, showConfirm, closeConfirm, agentFieldDefs, categoryAgentMap, agentTypeLabels, agentBadgeClass }) {
   const orderFieldDefs = (agentFieldDefs['order'] || []).filter(f => f.config_key === 'collect_fields')
   const allFieldKeys = orderFieldDefs.map(f => f.key)
   const collectFieldDefs = orderFieldDefs
   const agentTypeFromCategory = (cat) => {
-    const c = (cat || '').trim()
-    if (c === '뉴스') return 'news'
-    if (c === '카페') return 'cafe'
-    if (c === '경쟁사이벤트') return 'promotion'
-    if (c === '경쟁사배너') return 'banner'
-    if (c === '브랜드목록') return 'directory'
-    if (c === '주문서') return 'order'
-    if (c === '쿠폰') return 'coupon'
-    return 'product'
+    return categoryAgentMap[(cat || '').trim()] || 'product'
   }
 
-  const AGENT_TYPE_LABELS = {
-    product: '상품 수집', news: '뉴스 기사', cafe: '카페 게시글',
-    promotion: '이벤트 수집', banner: '배너 수집', directory: '목록 수집',
-    order: '주문서 수집', coupon: '쿠폰 다운로드',
-  }
+  const AGENT_TYPE_LABELS = agentTypeLabels
+  const AGENT_BADGE_CLASS = agentBadgeClass
 
   const initCat = categories[0] || ''
   const initAgent = agentTypeFromCategory(initCat)

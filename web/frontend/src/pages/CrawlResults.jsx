@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 const STATUS_CLASS = {
@@ -11,18 +11,6 @@ const STATUS_LABEL = {
   success: '성공', running: '실행중',
   pending: '대기', failed: '실패',
   stopped: '강제종료',
-}
-
-const AGENT_LABELS = {
-  product: '상품 수집', news: '뉴스 검색', cafe: '카페 수집',
-  promotion: '이벤트 수집', banner: '배너 수집', directory: '목록 수집',
-  order: '주문서 수집', local: '로컬 수집',
-}
-
-const AGENT_BADGE_CLASS = {
-  product: 'dp', news: 'pending', cafe: 'tess',
-  promotion: 'success', banner: 'running', directory: 'failed',
-  local: 'success',
 }
 
 /* ── 날짜/시간 유틸 ── */
@@ -71,10 +59,27 @@ export default function CrawlResults() {
   const [detail, setDetail] = useState(null)
   const [collapsedCats, setCollapsedCats] = useState({})
   const [collapsedDates, setCollapsedDates] = useState({})
+  const [systemCodes, setSystemCodes] = useState([])
+
+  const AGENT_LABELS = useMemo(() => {
+    const result = {}
+    systemCodes.filter(c => c.group_code === 'agent_type' && c.is_active).forEach(c => { result[c.code] = c.label })
+    return Object.keys(result).length ? result : { product: '상품 수집', news: '뉴스 검색', cafe: '카페 수집', promotion: '이벤트 수집', banner: '배너 수집', directory: '목록 수집', order: '주문서 수집' }
+  }, [systemCodes])
+
+  const AGENT_BADGE_CLASS = useMemo(() => {
+    const result = {}
+    systemCodes.filter(c => c.group_code === 'agent_type' && c.is_active).forEach(c => { result[c.code] = c.extra?.badge_class || 'dp' })
+    return Object.keys(result).length ? result : { product: 'dp', news: 'pending', cafe: 'tess', promotion: 'success', banner: 'running', directory: 'failed' }
+  }, [systemCodes])
 
   useEffect(() => {
-    fetch('/api/sites').then(r => r.json()).then(data => {
-      setSites(data)
+    Promise.all([
+      fetch('/api/sites').then(r => r.json()),
+      fetch('/api/codes').then(r => r.json()),
+    ]).then(([siteData, codes]) => {
+      setSites(siteData)
+      setSystemCodes(codes)
       if (initialSite) setSelectedSite(initialSite)
     }).catch(() => {})
   }, [])

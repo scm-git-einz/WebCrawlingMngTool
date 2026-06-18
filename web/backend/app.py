@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from web.backend.routes import sites, results, ocr, proxy, llm, logs, failures
+from web.backend.routes import sites, results, ocr, proxy, llm, logs, failures, codes
 
 app = FastAPI(title="크롤링 관리 대시보드", version="1.0.0")
 
@@ -32,6 +32,7 @@ app.include_router(proxy.router, prefix="/api")
 app.include_router(llm.router, prefix="/api")
 app.include_router(logs.router, prefix="/api")
 app.include_router(failures.router)
+app.include_router(codes.router, prefix="/api")
 
 
 @app.on_event("startup")
