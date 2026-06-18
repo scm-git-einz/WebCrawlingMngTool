@@ -348,6 +348,29 @@ select.form-control { cursor: pointer; }
 .toggle input:checked + .slider { background: var(--success); }
 .toggle input:checked + .slider::before { transform: translateX(20px); }
 
+/* ─── Status Icon Button ─── */
+.btn-status {
+  background: none;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 18px;
+  padding: 4px 8px;
+  transition: all 0.2s;
+  line-height: 1;
+}
+.btn-status:hover {
+  transform: scale(1.2);
+}
+.btn-status.active {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+.btn-status.inactive {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
 /* ─── Modal ─── */
 .modal-overlay {
   position: fixed;
@@ -1327,9 +1350,15 @@ select.form-control { cursor: pointer; }
   padding: 6px 0;
 }
 
-/* ─── Schedule Select ─── */
-.schedule-select {
-  padding: 4px 8px;
+/* ─── Schedule Input (crontab style) ─── */
+.schedule-input {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: nowrap;
+}
+.schedule-mode-select {
+  padding: 4px 6px;
   border: 1px solid var(--border);
   border-radius: 4px;
   font-size: 12px;
@@ -1337,9 +1366,61 @@ select.form-control { cursor: pointer; }
   background: #fff;
   cursor: pointer;
   outline: none;
-  min-width: 72px;
+  min-width: 68px;
 }
-.schedule-select:focus { border-color: var(--primary); }
+.schedule-mode-select:focus { border-color: var(--primary); }
+.schedule-detail {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.schedule-unit {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.cron-field {
+  padding: 4px 2px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text);
+  background: #fff;
+  cursor: pointer;
+  outline: none;
+  min-width: 52px;
+}
+.cron-field:focus { border-color: var(--primary); }
+.schedule-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.btn-schedule-apply,
+.btn-schedule-cancel {
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+  transition: background 0.15s;
+}
+.btn-schedule-apply {
+  background: var(--success);
+  color: #fff;
+}
+.btn-schedule-apply:hover { background: #16a34a; }
+.btn-schedule-cancel {
+  background: var(--border);
+  color: var(--text-secondary);
+}
+.btn-schedule-cancel:hover { background: #d1d5db; }
 
 /* ─── Run Button ─── */
 .btn-run {

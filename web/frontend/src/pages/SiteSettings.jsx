@@ -1,15 +1,52 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 
-const SCHEDULE_OPTIONS = [
-  { value: '',       label: '미설정' },
-  { value: 'hourly', label: '시간' },
-  { value: 'daily',  label: '일간' },
-  { value: 'weekly', label: '주간' },
-  { value: 'monthly',label: '월간' },
-]
+const WEEKDAY_LABELS = ['일', '월', '화', '수', '목', '금', '토']
 
-const SCHEDULE_LABELS = {
-  '': '미설정', hourly: '시간', daily: '일간', weekly: '주간', monthly: '월간',
+function parseSchedule(val) {
+  if (!val) return { mode: 'none' }
+  if (val === 'adhoc') return { mode: 'adhoc' }
+  if (val === 'hourly') return { mode: 'hourly', interval: 1 }
+  if (val === 'daily') return { mode: 'daily', hour: 0 }
+  if (val === 'weekly') return { mode: 'weekly', weekday: 1, hour: 0 }
+  if (val === 'monthly') return { mode: 'monthly', day: 1, hour: 0 }
+  const oldFmt = val.match(/^(\d+)([hdwm])$/)
+  if (oldFmt) {
+    const [, n, u] = oldFmt
+    if (u === 'h') return { mode: 'hourly', interval: parseInt(n, 10) }
+    if (u === 'd') return { mode: 'daily', hour: 0 }
+    if (u === 'w') return { mode: 'weekly', weekday: parseInt(n, 10), hour: 0 }
+    if (u === 'm') return { mode: 'monthly', day: parseInt(n, 10), hour: 0 }
+  }
+  const m = val.match(/^hourly:(\d+)$/)
+  if (m) return { mode: 'hourly', interval: parseInt(m[1], 10) }
+  const m2 = val.match(/^daily:(\d+)$/)
+  if (m2) return { mode: 'daily', hour: parseInt(m2[1], 10) }
+  const m3 = val.match(/^weekly:(\d+):(\d+)$/)
+  if (m3) return { mode: 'weekly', weekday: parseInt(m3[1], 10), hour: parseInt(m3[2], 10) }
+  const m4 = val.match(/^monthly:(\d+):(\d+)$/)
+  if (m4) return { mode: 'monthly', day: parseInt(m4[1], 10), hour: parseInt(m4[2], 10) }
+  return { mode: 'none' }
+}
+
+function formatScheduleValue(mode, opts) {
+  if (mode === 'none') return ''
+  if (mode === 'adhoc') return 'adhoc'
+  if (mode === 'hourly') return `hourly:${opts.interval || 1}`
+  if (mode === 'daily') return `daily:${opts.hour ?? 0}`
+  if (mode === 'weekly') return `weekly:${opts.weekday ?? 1}:${opts.hour ?? 0}`
+  if (mode === 'monthly') return `monthly:${opts.day ?? 1}:${opts.hour ?? 0}`
+  return ''
+}
+
+function scheduleLabel(val) {
+  if (!val) return '미설정'
+  const p = parseSchedule(val)
+  if (p.mode === 'adhoc') return '수시'
+  if (p.mode === 'hourly') return p.interval === 1 ? '매시' : `${p.interval}시간마다`
+  if (p.mode === 'daily') return `매일 ${p.hour}시`
+  if (p.mode === 'weekly') return `매주 ${WEEKDAY_LABELS[p.weekday]}요일 ${p.hour}시`
+  if (p.mode === 'monthly') return `매월 ${p.day}일 ${p.hour}시`
+  return val || '미설정'
 }
 
 const CATEGORY_LABELS = {
@@ -29,6 +66,108 @@ const CATEGORY_LABELS = {
   '쿠폰':             { icon: '\u{1F3AB}', color: '#d97706' },
 }
 
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   수집 주기 입력 (Schedule Input)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+function ScheduleInput({ value, onChange }) {
+  const parsed = parseSchedule(value)
+  const [mode, setMode] = useState(parsed.mode)
+  const [interval, setInterval] = useState(parsed.interval || 1)
+  const [hour, setHour] = useState(parsed.hour ?? 0)
+  const [weekday, setWeekday] = useState(parsed.weekday ?? 1)
+  const [day, setDay] = useState(parsed.day ?? 1)
+  const [editing, setEditing] = useState(false)
+
+  useEffect(() => {
+    const p = parseSchedule(value)
+    setMode(p.mode)
+    setInterval(p.interval || 1)
+    setHour(p.hour ?? 0)
+    setWeekday(p.weekday ?? 1)
+    setDay(p.day ?? 1)
+    setEditing(false)
+  }, [value])
+
+  const buildValue = () => formatScheduleValue(mode, { interval, hour, weekday, day })
+  const newValue = buildValue()
+  const changed = newValue !== (value || '')
+
+  const handleModeChange = (newMode) => {
+    setMode(newMode)
+    setInterval(1); setHour(0); setWeekday(1); setDay(1)
+    setEditing(true)
+  }
+
+  const edit = (setter) => (e) => { setter(parseInt(e.target.value, 10)); setEditing(true) }
+
+  const handleApply = () => { setEditing(false); onChange(newValue) }
+  const handleCancel = () => {
+    const p = parseSchedule(value)
+    setMode(p.mode); setInterval(p.interval || 1)
+    setHour(p.hour ?? 0); setWeekday(p.weekday ?? 1); setDay(p.day ?? 1)
+    setEditing(false)
+  }
+
+  return (
+    <div className="schedule-input">
+      <select className="schedule-mode-select" value={mode} onChange={e => handleModeChange(e.target.value)}>
+        <option value="none">미설정</option>
+        <option value="adhoc">수시</option>
+        <option value="hourly">매 N시간</option>
+        <option value="daily">매일</option>
+        <option value="weekly">매주</option>
+        <option value="monthly">매월</option>
+      </select>
+
+      {mode === 'hourly' && (
+        <div className="schedule-detail">
+          <select className="cron-field" value={interval} onChange={edit(setInterval)}>
+            {[1,2,3,4,6,8,12].map(n => <option key={n} value={n}>{n}시간</option>)}
+          </select>
+          <span className="schedule-unit">마다</span>
+        </div>
+      )}
+
+      {mode === 'daily' && (
+        <div className="schedule-detail">
+          <select className="cron-field" value={hour} onChange={edit(setHour)}>
+            {Array.from({ length: 24 }, (_, i) => <option key={i} value={i}>{i}시</option>)}
+          </select>
+        </div>
+      )}
+
+      {mode === 'weekly' && (
+        <div className="schedule-detail">
+          <select className="cron-field" value={weekday} onChange={edit(setWeekday)}>
+            {WEEKDAY_LABELS.map((l, i) => <option key={i} value={i}>{l}요일</option>)}
+          </select>
+          <select className="cron-field" value={hour} onChange={edit(setHour)}>
+            {Array.from({ length: 24 }, (_, i) => <option key={i} value={i}>{i}시</option>)}
+          </select>
+        </div>
+      )}
+
+      {mode === 'monthly' && (
+        <div className="schedule-detail">
+          <select className="cron-field" value={day} onChange={edit(setDay)}>
+            {Array.from({ length: 31 }, (_, i) => <option key={i+1} value={i+1}>{i+1}일</option>)}
+          </select>
+          <select className="cron-field" value={hour} onChange={edit(setHour)}>
+            {Array.from({ length: 24 }, (_, i) => <option key={i} value={i}>{i}시</option>)}
+          </select>
+        </div>
+      )}
+
+      {(editing || changed) && (
+        <div className="schedule-actions">
+          <button className="btn-schedule-apply" onClick={handleApply} title="적용">✓</button>
+          <button className="btn-schedule-cancel" onClick={handleCancel} title="취소">✕</button>
+        </div>
+      )}
+    </div>
+  )
+}
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    확인 대화상자 (Confirm Modal)
@@ -136,11 +275,11 @@ export default function SiteSettings() {
 
   const updateSchedule = (siteId, schedule) => {
     const site = sites.find(s => s.id === siteId)
-    const label = SCHEDULE_LABELS[schedule] || '미설정'
+    const label = scheduleLabel(schedule)
     showConfirm({
       title: '수집 주기 변경',
       message: `"${site.site_name}" 사이트의 수집 주기를 변경하시겠습니까?`,
-      detail: `수집 주기: ${SCHEDULE_LABELS[site.crawl_schedule || ''] || '미설정'} → ${label}`,
+      detail: `수집 주기: ${scheduleLabel(site.crawl_schedule || '')} → ${label}`,
       confirmLabel: '변경',
       onConfirm: async () => {
         closeConfirm()
@@ -306,11 +445,11 @@ export default function SiteSettings() {
                 className="btn btn-outline btn-sm"
                 onClick={() => {
                   const ids = schSites.filter(s => s.is_active).map(s => s.id)
-                  requestRunCrawl(ids, `${SCHEDULE_LABELS[sch]} 주기 사이트`)
+                  requestRunCrawl(ids, `${scheduleLabel(sch)} 주기 사이트`)
                 }}
                 title={`${schSites.map(s => s.site_name).join(', ')}`}
               >
-                {'📅'} {SCHEDULE_LABELS[sch]} ({schSites.filter(s => s.is_active).length})
+                {'📅'} {scheduleLabel(sch)} ({schSites.filter(s => s.is_active).length})
               </button>
             ))}
             {Object.keys(scheduleGroups).length === 0 && (
@@ -383,7 +522,7 @@ export default function SiteSettings() {
                     <th>사이트명</th>
                     <th>URL</th>
                     <th style={{width:80}}>에이전트</th>
-                    <th style={{width:100}}>수집 주기</th>
+                    <th style={{width:240}}>수집 주기</th>
                     <th style={{width:60}}>상태</th>
                     <th style={{width:50}}>설정</th>
                     <th style={{width:80}}>실행</th>
@@ -411,21 +550,19 @@ export default function SiteSettings() {
                           </span>
                         </td>
                         <td>
-                          <select
-                            className="schedule-select"
+                          <ScheduleInput
                             value={s.crawl_schedule || ''}
-                            onChange={e => updateSchedule(s.id, e.target.value)}
-                          >
-                            {SCHEDULE_OPTIONS.map(opt => (
-                              <option key={opt.value} value={opt.value}>{opt.label}</option>
-                            ))}
-                          </select>
+                            onChange={val => updateSchedule(s.id, val)}
+                          />
                         </td>
-                        <td>
-                          <label className="toggle">
-                            <input type="checkbox" checked={!!s.is_active} onChange={() => toggleActive(s.id)} />
-                            <span className="slider"></span>
-                          </label>
+                        <td style={{textAlign:'center'}}>
+                          <button
+                            className={`btn-status ${s.is_active ? 'active' : 'inactive'}`}
+                            onClick={() => toggleActive(s.id)}
+                            title={s.is_active ? '활성 — 클릭하여 비활성화' : '비활성 — 클릭하여 활성화'}
+                          >
+                            {s.is_active ? '🟢' : '🔴'}
+                          </button>
                         </td>
                         <td>
                           <button className="btn btn-outline btn-sm" onClick={() => openConfig(s.id)}>
