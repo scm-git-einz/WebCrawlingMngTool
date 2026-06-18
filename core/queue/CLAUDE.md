@@ -17,6 +17,7 @@
 
 ```
 core/queue/
+
 ├── CLAUDE.md           ← 이 파일
 ├── __init__.py         ← get_queue(), TASK_QUEUE_MAP 외부 노출
 ├── backend.py          ← QueueBackend / LocalQueue / SQSQueue
@@ -58,15 +59,16 @@ core/queue/
 ```
 
 **역할 분리 원칙**
+
 - TaskWorker : Task Queue에서 꺼내서 에이전트 실행 + ack/nack 결정만 담당
-- Agent      : 수집 성공 시 직접 Ingest Queue에 push (실패는 exception raise → TaskWorker가 nack)
+- Agent : 수집 성공 시 직접 Ingest Queue에 push (실패는 exception raise → TaskWorker가 nack)
 - IngestWorker: Ingest Queue에서 꺼내서 RawStore에 저장만 담당
 
-| 구간 | 로컬 (현재) | 운영 (SQS 전환 시) |
-| ---- | ----------- | ------------------ |
-| Task Queue | `LocalQueue` (Python `queue.Queue`) | AWS SQS (agent_type별 큐) |
-| Ingest Queue | `LocalQueue` | AWS SQS (`ingest-queue`) |
-| DLQ | `LocalQueue` | AWS SQS DLQ |
+| 구간         | 로컬 (현재)                         | 운영 (SQS 전환 시)        |
+| ------------ | ----------------------------------- | ------------------------- |
+| Task Queue   | `LocalQueue` (Python `queue.Queue`) | AWS SQS (agent_type별 큐) |
+| Ingest Queue | `LocalQueue`                        | AWS SQS (`ingest-queue`)  |
+| DLQ          | `LocalQueue`                        | AWS SQS DLQ               |
 
 - Redis 미사용
 - SQS 전환 시 `QueueBackend` 서브클래스만 교체 — 에이전트/워커 코드 무변경
@@ -92,7 +94,7 @@ class SQSQueue(QueueBackend):
 
 ---
 
-## 5. __init__.py — get_queue() / TASK_QUEUE_MAP
+## 5. **init**.py — get_queue() / TASK_QUEUE_MAP
 
 ```python
 # 에이전트 타입 → Task Queue 이름 매핑 (방식 2: 에이전트별 큐)
@@ -112,6 +114,7 @@ def get_queue(name: str) -> QueueBackend:
 ```
 
 사용 예:
+
 ```python
 from core.queue import get_queue
 
@@ -184,6 +187,7 @@ CREATE TABLE IF NOT EXISTS queue_log (
 ```
 
 상태 전이:
+
 ```
 put()  → enqueued
 get()  → dequeued
@@ -208,6 +212,7 @@ TaskWorker → dlq.put(msg) + task_q.ack(handle)
 ```
 
 TaskWorker의 ack/nack/DLQ 처리 흐름:
+
 ```python
 try:
     agent.fetch_product(url)       # 성공 시 에이전트가 ingest_q.put()
@@ -222,6 +227,7 @@ except:
 ```
 
 **DLQ 이후 처리:**
+
 - `queue_log` 테이블에 `status='dlq'`로 기록 (자동)
 - 웹 UI에서 DLQ 실패 목록 조회 가능하도록 구현 예정 (site_id / payload / retry_count / error_msg 표시)
 - 원인 파악 후 `scripts/replay_dlq.py` 로 DLQ → 원본 Task Queue 재적재 (수동)
@@ -232,13 +238,13 @@ except:
 
 ## 9. 절대 규칙
 
-| 규칙 | 이유 |
-| ---- | ---- |
-| `ack()`는 저장 완료 후에만 호출 | 저장 실패 시 메시지 유실 방지 |
-| 새 agent_type 추가 시 `TASK_QUEUE_MAP`에 등록 | 큐 누락 시 작업 적재 불가 |
-| `LocalQueue`는 운영 환경 사용 금지 | 프로세스 재시작 시 메시지 초기화됨 |
-| SQS 전환 시 `QueueBackend` 서브클래스만 교체 | 에이전트/워커 코드 무변경 원칙 |
-| 큐 작업마다 `QueueLogger` 호출 필수 | 이력 없으면 DLQ 판단/재처리 불가 |
+| 규칙                                          | 이유                               |
+| --------------------------------------------- | ---------------------------------- |
+| `ack()`는 저장 완료 후에만 호출               | 저장 실패 시 메시지 유실 방지      |
+| 새 agent_type 추가 시 `TASK_QUEUE_MAP`에 등록 | 큐 누락 시 작업 적재 불가          |
+| `LocalQueue`는 운영 환경 사용 금지            | 프로세스 재시작 시 메시지 초기화됨 |
+| SQS 전환 시 `QueueBackend` 서브클래스만 교체  | 에이전트/워커 코드 무변경 원칙     |
+| 큐 작업마다 `QueueLogger` 호출 필수           | 이력 없으면 DLQ 판단/재처리 불가   |
 
 ---
 
