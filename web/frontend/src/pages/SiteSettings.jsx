@@ -26,6 +26,7 @@ const CATEGORY_LABELS = {
   '뉴스':             { icon: '\u{1F4F0}', color: '#64748b' },
   '카페':             { icon: '\u{2615}', color: '#a855f7' },
   '주문서':           { icon: '\u{1F4B3}', color: '#059669' },
+  '쿠폰':             { icon: '\u{1F3AB}', color: '#d97706' },
 }
 
 
@@ -68,6 +69,7 @@ export default function SiteSettings() {
   const [logView, setLogView] = useState(null)  // { siteId, siteName }
   // 확인 대화상자 상태
   const [confirmState, setConfirmState] = useState(null)
+  const [agentFieldDefs, setAgentFieldDefs] = useState({})
 
   const showConfirm = ({ title, message, detail, confirmLabel, confirmType, onConfirm }) => {
     setConfirmState({ title, message, detail, confirmLabel, confirmType, onConfirm })
@@ -76,9 +78,15 @@ export default function SiteSettings() {
 
   const loadSites = () => {
     setLoading(true)
-    fetch('/api/sites')
-      .then(r => r.json())
-      .then(data => { setSites(data); setLoading(false) })
+    Promise.all([
+      fetch('/api/sites').then(r => r.json()),
+      fetch('/api/agent-fields').then(r => r.json()),
+    ])
+      .then(([data, fieldDefs]) => {
+        setSites(data)
+        setAgentFieldDefs(fieldDefs)
+        setLoading(false)
+      })
       .catch(() => setLoading(false))
   }
 
@@ -470,6 +478,7 @@ export default function SiteSettings() {
           onSaved={loadSites}
           showConfirm={showConfirm}
           closeConfirm={closeConfirm}
+          agentFieldDefs={agentFieldDefs}
         />
       )}
 
@@ -480,6 +489,7 @@ export default function SiteSettings() {
           onSaved={() => { setConfigEdit(null); loadSites() }}
           showConfirm={showConfirm}
           closeConfirm={closeConfirm}
+          agentFieldDefs={agentFieldDefs}
         />
       )}
 
@@ -604,7 +614,7 @@ function LogViewerModal({ siteId, siteName, onClose }) {
    에이전트 유형별 설정 모달
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 const AGENT_BADGE_CLASS = {
-  product: 'dp', news: 'pending', cafe: 'tess', promotion: 'promo', banner: 'banner-badge', directory: 'dir-badge', order: 'order-badge',
+  product: 'dp', news: 'pending', cafe: 'tess', promotion: 'promo', banner: 'banner-badge', directory: 'dir-badge', order: 'order-badge', coupon: 'coupon-badge',
 }
 
 
@@ -984,9 +994,9 @@ function CredentialManager({ siteId, credentials: initialCreds, showConfirm, clo
 }
 
 
-function ConfigModal({ site, onClose, onSaved, showConfirm, closeConfirm }) {
+function ConfigModal({ site, onClose, onSaved, showConfirm, closeConfirm, agentFieldDefs }) {
   const agentType = site.agent_type
-  const modalWidth = agentType === 'news' ? 560 : agentType === 'product' ? 580 : agentType === 'order' ? 560 : 520
+  const modalWidth = agentType === 'news' ? 560 : agentType === 'product' ? 580 : agentType === 'order' ? 600 : agentType === 'coupon' ? 580 : 520
 
   const [editInfo, setEditInfo] = useState({ name: site.name, url: site.url })
   const [infoEditing, setInfoEditing] = useState(false)
@@ -1094,13 +1104,14 @@ function ConfigModal({ site, onClose, onSaved, showConfirm, closeConfirm }) {
             )}
           </div>
 
-          {agentType === 'product'   && <ProductConfig   site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
+          {agentType === 'product'   && <ProductConfig   site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} fieldDefs={agentFieldDefs['product'] || []} />}
           {agentType === 'news'      && <NewsConfig      site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
           {agentType === 'cafe'      && <CafeConfig      site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
           {agentType === 'promotion' && <PromotionConfig site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
           {agentType === 'banner'    && <BannerConfig    site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
-          {agentType === 'directory' && <DirectoryConfig site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
-          {agentType === 'order'     && <OrderConfig     site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
+          {agentType === 'directory' && <DirectoryConfig site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} fieldDefs={agentFieldDefs['directory'] || []} />}
+          {agentType === 'order'     && <OrderConfig     site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} fieldDefs={agentFieldDefs['order'] || []} />}
+          {agentType === 'coupon'    && <CouponConfig    site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
           <CredentialManager siteId={site.id} credentials={site.credentials} showConfirm={showConfirm} closeConfirm={closeConfirm} />
         </div>
       </div>
@@ -1110,19 +1121,6 @@ function ConfigModal({ site, onClose, onSaved, showConfirm, closeConfirm }) {
 
 
 /* ── product: 상품/랭킹 수집 설정 (v2) ───────────── */
-const PRODUCT_FIELDS = [
-  { key: 'name',           label: '상품명',       group: 'basic' },
-  { key: 'price',          label: '가격',         group: 'basic' },
-  { key: 'brand',          label: '브랜드',       group: 'basic' },
-  { key: 'image',          label: '이미지',       group: 'basic' },
-  { key: 'rank',           label: '순위',         group: 'extra' },
-  { key: 'original_price', label: '원가',         group: 'extra' },
-  { key: 'discount_rate',  label: '할인율',       group: 'extra' },
-  { key: 'gift',           label: '사은품',       group: 'extra' },
-  { key: 'reference_no',   label: '레퍼런스번호', group: 'extra' },
-  { key: 'category',       label: '카테고리',     group: 'extra' },
-]
-const DEFAULT_COLLECT_FIELDS = ['name', 'price', 'brand', 'image']
 
 const LIST_TYPE_OPTIONS = [
   { value: 'ranking', label: '랭킹',       icon: '🏆', desc: '순위 기반 목록 (베스트, 인기순)' },
@@ -1154,12 +1152,15 @@ const DETAIL_FIELD_DEFS = [
   { key: 'spec',                label: '제품스펙' },
 ]
 
-function ProductConfig({ site, onSaved, showConfirm, closeConfirm }) {
+function ProductConfig({ site, onSaved, showConfirm, closeConfirm, fieldDefs }) {
+  const collectFieldDefs = fieldDefs.filter(f => f.config_key === 'collect_fields')
+  const defaultFieldKeys = collectFieldDefs.slice(0, 4).map(f => f.key)
+
   const [config, setConfig] = useState(() => {
     const c = site.config || {}
+    const merged = [...new Set([...(c.collect_fields || []), ...(c.optional_fields || [])])]
     return {
-      collect_fields: c.collect_fields || [...DEFAULT_COLLECT_FIELDS],
-      optional_fields: c.optional_fields || [],
+      collect_fields: merged.length > 0 ? merged : [...defaultFieldKeys],
       list_type: c.list_type || 'catalog',
       pagination: c.pagination || 'scroll',
       max_pages: c.max_pages ?? 5,
@@ -1176,25 +1177,15 @@ function ProductConfig({ site, onSaved, showConfirm, closeConfirm }) {
   const [extraFields, setExtraFields] = useState(config.extra_fields || [])
 
   const toggleField = (key) => {
-    const all = [...config.collect_fields, ...config.optional_fields]
-    if (all.includes(key)) {
-      setConfig({
-        ...config,
-        collect_fields: config.collect_fields.filter(f => f !== key),
-        optional_fields: config.optional_fields.filter(f => f !== key),
-      })
+    if (config.collect_fields.includes(key)) {
+      setConfig({ ...config, collect_fields: config.collect_fields.filter(f => f !== key) })
     } else {
-      const info = PRODUCT_FIELDS.find(f => f.key === key)
-      if (info?.group === 'basic') {
-        setConfig({ ...config, collect_fields: [...config.collect_fields, key] })
-      } else {
-        setConfig({ ...config, optional_fields: [...config.optional_fields, key] })
-      }
+      setConfig({ ...config, collect_fields: [...config.collect_fields, key] })
     }
   }
 
   const isFieldChecked = (key) => {
-    return config.collect_fields.includes(key) || config.optional_fields.includes(key)
+    return config.collect_fields.includes(key)
   }
 
   const handleSave = () => {
@@ -1202,7 +1193,7 @@ function ProductConfig({ site, onSaved, showConfirm, closeConfirm }) {
     showConfirm({
       title: '설정 저장',
       message: `"${site.name}" 사이트의 수집 설정을 변경하시겠습니까?`,
-      detail: `목록 유형: ${listLabel} | 수집 필드: ${config.collect_fields.length + config.optional_fields.length}개`,
+      detail: `목록 유형: ${listLabel} | 수집 필드: ${config.collect_fields.length}개`,
       confirmLabel: '저장',
       onConfirm: async () => {
         closeConfirm()
@@ -1210,7 +1201,6 @@ function ProductConfig({ site, onSaved, showConfirm, closeConfirm }) {
         try {
           const payload = {
             collect_fields: config.collect_fields,
-            optional_fields: config.optional_fields,
             list_type: config.list_type,
             pagination: config.pagination,
             max_pages: config.max_pages,
@@ -1248,22 +1238,17 @@ function ProductConfig({ site, onSaved, showConfirm, closeConfirm }) {
       {site.url && (
         <UrlAnalyzePanel
           url={site.url}
-          existingFieldKeys={PRODUCT_FIELDS.map(f => f.key)}
+          existingFieldKeys={collectFieldDefs.map(f => f.key)}
           textColor="#1d4ed8"
           savedExtraFields={config.extra_fields}
           onExistingFieldsFound={(foundKeys) => {
             setConfig(prev => {
-              const allChecked = new Set([...prev.collect_fields, ...prev.optional_fields])
-              const basicKeys = new Set(PRODUCT_FIELDS.filter(f => f.group === 'basic').map(f => f.key))
-              const newCollect = [...prev.collect_fields]
-              const newOptional = [...prev.optional_fields]
-              PRODUCT_FIELDS.forEach(f => {
-                if (foundKeys.has(f.key) && !allChecked.has(f.key)) {
-                  if (basicKeys.has(f.key)) newCollect.push(f.key)
-                  else newOptional.push(f.key)
-                }
+              const existing = new Set(prev.collect_fields)
+              const newFields = [...prev.collect_fields]
+              collectFieldDefs.forEach(f => {
+                if (foundKeys.has(f.key) && !existing.has(f.key)) newFields.push(f.key)
               })
-              return { ...prev, collect_fields: newCollect, optional_fields: newOptional }
+              return { ...prev, collect_fields: newFields }
             })
           }}
           onExtraFieldsChange={setExtraFields}
@@ -1274,22 +1259,8 @@ function ProductConfig({ site, onSaved, showConfirm, closeConfirm }) {
       <div className="product-config-section active">
         <h4 className="config-section-title">수집 필드</h4>
         <div className="config-section-desc">이 URL에서 수집할 데이터 항목을 선택합니다</div>
-        <div className="field-group-label">기본 필드</div>
         <div className="field-checkbox-grid">
-          {PRODUCT_FIELDS.filter(f => f.group === 'basic').map(f => (
-            <label key={f.key} className={`field-checkbox ${isFieldChecked(f.key) ? 'checked' : ''}`}>
-              <input
-                type="checkbox"
-                checked={isFieldChecked(f.key)}
-                onChange={() => toggleField(f.key)}
-              />
-              <span>{f.label}</span>
-            </label>
-          ))}
-        </div>
-        <div className="field-group-label" style={{marginTop:10}}>추가 필드</div>
-        <div className="field-checkbox-grid">
-          {PRODUCT_FIELDS.filter(f => f.group === 'extra').map(f => (
+          {collectFieldDefs.map(f => (
             <label key={f.key} className={`field-checkbox ${isFieldChecked(f.key) ? 'checked' : ''}`}>
               <input
                 type="checkbox"
@@ -2038,19 +2009,9 @@ const DIR_LIST_TYPE_OPTIONS = [
   { value: 'event_list',      label: '이벤트 목록',     icon: '📅', desc: '이벤트/프로모션 리스트' },
 ]
 
-const DIR_FIELD_OPTIONS = [
-  { key: 'name',         label: '이름 (브랜드명/이벤트명)' },
-  { key: 'category',     label: '카테고리' },
-  { key: 'branch',       label: '지점명' },
-  { key: 'location',     label: '위치 (층)' },
-  { key: 'phone',        label: '전화번호' },
-  { key: 'description',  label: '설명' },
-  { key: 'period',       label: '기간' },
-  { key: 'status',       label: '상태 (진행중/종료)' },
-  { key: 'detail_url',   label: '상세 URL' },
-]
 
-function DirectoryConfig({ site, onSaved, showConfirm, closeConfirm }) {
+function DirectoryConfig({ site, onSaved, showConfirm, closeConfirm, fieldDefs }) {
+  const collectFieldDefs = fieldDefs.filter(f => f.config_key === 'collect_fields')
   const [config, setConfig] = useState(() => {
     const c = site.config || {}
     return {
@@ -2117,14 +2078,14 @@ function DirectoryConfig({ site, onSaved, showConfirm, closeConfirm }) {
       {site.url && (
         <UrlAnalyzePanel
           url={site.url}
-          existingFieldKeys={DIR_FIELD_OPTIONS.map(f => f.key)}
+          existingFieldKeys={collectFieldDefs.map(f => f.key)}
           textColor="#0e7490"
           savedExtraFields={extraFields}
           onExistingFieldsFound={(foundKeys) => {
             setConfig(prev => {
               const existing = new Set(prev.collect_fields)
               const newFields = [...prev.collect_fields]
-              DIR_FIELD_OPTIONS.forEach(f => {
+              collectFieldDefs.forEach(f => {
                 if (foundKeys.has(f.key) && !existing.has(f.key)) newFields.push(f.key)
               })
               return { ...prev, collect_fields: newFields }
@@ -2177,7 +2138,7 @@ function DirectoryConfig({ site, onSaved, showConfirm, closeConfirm }) {
         <h4 className="config-section-title">수집 필드</h4>
         <div className="config-section-desc">각 항목에서 수집할 데이터를 선택합니다</div>
         <div className="field-checkbox-grid" style={{gridTemplateColumns:'1fr 1fr'}}>
-          {DIR_FIELD_OPTIONS.map(f => (
+          {collectFieldDefs.map(f => (
             <label key={f.key} className={`field-checkbox ${config.collect_fields.includes(f.key) ? 'checked' : ''}`}>
               <input
                 type="checkbox"
@@ -2264,38 +2225,31 @@ function DirectoryConfig({ site, onSaved, showConfirm, closeConfirm }) {
 const CATEGORY_DEFAULT_CONFIGS = {
   /* product 카테고리들 */
   '트렌드매장': {
-    collect_fields: ['name','price','brand','image'],
-    optional_fields: ['rank','original_price','discount_rate','reference_no'],
+    collect_fields: ['name','price','brand','image','rank','original_price','discount_rate','reference_no'],
     list_type: 'ranking', pagination: 'scroll', max_pages: 5, max_items: 100, detail_page: true,
   },
   '경쟁사': {
-    collect_fields: ['name','price','brand','image'],
-    optional_fields: ['rank','original_price','discount_rate','gift','reference_no'],
+    collect_fields: ['name','price','brand','image','rank','original_price','discount_rate','gift','reference_no'],
     list_type: 'ranking', pagination: 'scroll', max_pages: 10, max_items: 0, detail_page: true,
   },
   '브랜드공식': {
-    collect_fields: ['name','price','brand','image'],
-    optional_fields: ['reference_no','category'],
+    collect_fields: ['name','price','brand','image','reference_no','category'],
     list_type: 'catalog', pagination: 'scroll', max_pages: 10, max_items: 0, detail_page: true,
   },
   '네이버스토어': {
-    collect_fields: ['name','price','brand','image'],
-    optional_fields: ['original_price','discount_rate','reference_no'],
+    collect_fields: ['name','price','brand','image','original_price','discount_rate','reference_no'],
     list_type: 'catalog', pagination: 'scroll', max_pages: 10, max_items: 0, detail_page: true,
   },
   '경쟁사중국': {
-    collect_fields: ['name','price','brand','image'],
-    optional_fields: ['rank','original_price','discount_rate','reference_no'],
+    collect_fields: ['name','price','brand','image','rank','original_price','discount_rate','reference_no'],
     list_type: 'ranking', pagination: 'scroll', max_pages: 10, max_items: 0, detail_page: true,
   },
   '트렌드Global매장': {
-    collect_fields: ['name','price','brand','image'],
-    optional_fields: ['rank','original_price','discount_rate'],
+    collect_fields: ['name','price','brand','image','rank','original_price','discount_rate'],
     list_type: 'ranking', pagination: 'scroll', max_pages: 5, max_items: 100, detail_page: false,
   },
   '당사온라인몰': {
-    collect_fields: ['name','price','brand','image'],
-    optional_fields: ['original_price','discount_rate','category'],
+    collect_fields: ['name','price','brand','image','original_price','discount_rate','category'],
     list_type: 'catalog', pagination: 'scroll', max_pages: 10, max_items: 0, detail_page: true,
   },
   /* banner */
@@ -2318,16 +2272,16 @@ const COLLECT_ITEMS_BY_AGENT = {
     color: '#eff6ff',
     textColor: '#1d4ed8',
     fields: [
-      { key: 'name',           label: '상품명',       group: 'basic',  default: true },
-      { key: 'price',          label: '가격',         group: 'basic',  default: true },
-      { key: 'brand',          label: '브랜드',       group: 'basic',  default: true },
-      { key: 'image',          label: '이미지',       group: 'basic',  default: true },
-      { key: 'rank',           label: '순위',         group: 'extra',  default: false },
-      { key: 'original_price', label: '원가',         group: 'extra',  default: false },
-      { key: 'discount_rate',  label: '할인율',       group: 'extra',  default: false },
-      { key: 'gift',           label: '사은품',       group: 'extra',  default: false },
-      { key: 'reference_no',   label: '레퍼런스번호', group: 'extra',  default: false },
-      { key: 'category',       label: '카테고리',     group: 'extra',  default: false },
+      { key: 'name',           label: '상품명',       default: true },
+      { key: 'price',          label: '가격',         default: true },
+      { key: 'brand',          label: '브랜드',       default: true },
+      { key: 'image',          label: '이미지',       default: true },
+      { key: 'rank',           label: '순위',         default: false },
+      { key: 'original_price', label: '원가',         default: false },
+      { key: 'discount_rate',  label: '할인율',       default: false },
+      { key: 'gift',           label: '사은품',       default: false },
+      { key: 'reference_no',   label: '레퍼런스번호', default: false },
+      { key: 'category',       label: '카테고리',     default: false },
     ],
     options: [
       { key: 'detail_page', label: '상품 상세 수집', desc: '상품 상세 페이지에 진입하여 추가 정보를 수집합니다' },
@@ -2381,8 +2335,7 @@ function buildCheckedState(agentType, catConfig) {
   spec.fields.forEach(f => {
     if (agentType === 'product') {
       const coll = catConfig?.collect_fields || []
-      const opt = catConfig?.optional_fields || []
-      fields[f.key] = coll.includes(f.key) || opt.includes(f.key)
+      fields[f.key] = coll.includes(f.key)
     } else if (agentType === 'banner') {
       const areas = catConfig?.banner_areas || []
       fields[f.key] = areas.includes(f.key)
@@ -2407,16 +2360,24 @@ function buildCheckedState(agentType, catConfig) {
 
 /* ── order: 주문서 결제정보 수집 설정 ─────────── */
 const MAX_PRODUCT_CODES = 1000
+const MAX_EVENT_COUPONS = 50
 
-function OrderConfig({ site, onSaved, showConfirm, closeConfirm }) {
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   쿠폰 다운로드 에이전트 설정
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+function CouponConfig({ site, onSaved, showConfirm, closeConfirm }) {
   const [config, setConfig] = useState(() => {
     const c = site.config || {}
     return {
       login_url: c.login_url || '',
+      lps_login_url: c.lps_login_url || '',
       product_detail_url_template: c.product_detail_url_template || '',
-      order_url: c.order_url || '',
       product_codes: Array.isArray(c.product_codes) ? c.product_codes : [],
-      collect_payment: c.collect_payment !== false,
+      detail_coupon_selector: c.detail_coupon_selector || '',
+      event_coupons: Array.isArray(c.event_coupons) ? c.event_coupons : [],
+      event_list_url: c.event_list_url || '',
+      coupon_keywords: Array.isArray(c.coupon_keywords) ? c.coupon_keywords : [],
       login_config: {
         id_selector: '', pwd_selector: '', submit_selector: '', success_indicator: '',
         ...(c.login_config || {}),
@@ -2424,6 +2385,21 @@ function OrderConfig({ site, onSaved, showConfirm, closeConfirm }) {
     }
   })
   const [codesText, setCodesText] = useState(() => (config.product_codes || []).join('\n'))
+  const [keywordsText, setKeywordsText] = useState(() => (config.coupon_keywords || []).join('\n'))
+  const [newEventUrl, setNewEventUrl] = useState('')
+  const [newEventSelector, setNewEventSelector] = useState('')
+
+  const parsedKeywords = useMemo(() => {
+    const seen = new Set()
+    const out = []
+    for (const line of keywordsText.split(/\r?\n/)) {
+      const t = line.trim()
+      if (!t || seen.has(t)) continue
+      seen.add(t)
+      out.push(t)
+    }
+    return out
+  }, [keywordsText])
 
   const parsedCodes = useMemo(() => {
     const seen = new Set()
@@ -2437,6 +2413,430 @@ function OrderConfig({ site, onSaved, showConfirm, closeConfirm }) {
     }
     return out
   }, [codesText])
+
+  const addEventCoupon = () => {
+    const url = newEventUrl.trim()
+    const sel = newEventSelector.trim()
+    if (!url || !sel) return
+    if (config.event_coupons.length >= MAX_EVENT_COUPONS) return
+    setConfig(c => ({
+      ...c,
+      event_coupons: [...c.event_coupons, { url, selector: sel }],
+    }))
+    setNewEventUrl('')
+    setNewEventSelector('')
+  }
+
+  const removeEventCoupon = (idx) => {
+    setConfig(c => ({
+      ...c,
+      event_coupons: c.event_coupons.filter((_, i) => i !== idx),
+    }))
+  }
+
+  const handleSave = () => {
+    showConfirm({
+      title: '설정 저장',
+      message: `"${site.name}" 쿠폰 다운로드 설정을 저장하시겠습니까?`,
+      confirmLabel: '저장',
+      onConfirm: async () => {
+        closeConfirm()
+        try {
+          const payload = { ...config, product_codes: parsedCodes, coupon_keywords: parsedKeywords }
+          const res = await fetch(`/api/sites/${site.id}/config`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ crawl_config: payload }),
+          })
+          if (!res.ok) throw new Error()
+          onSaved()
+        } catch {
+          alert('설정 저장에 실패했습니다.')
+        }
+      },
+    })
+  }
+
+  const productCount = parsedCodes.length
+  const eventCount = config.event_coupons.length
+  const hasAutoDiscovery = !!(config.event_list_url.trim() && parsedKeywords.length > 0)
+  const workflowSteps = [
+    { label: '로그인', desc: '메인+LPS 도메인 로그인 → 쿠키 공유', icon: '🔑' },
+    ...(eventCount > 0 ? [{
+      label: '이벤트 쿠폰',
+      desc: `이벤트 페이지 ${eventCount}건 순회 → 쿠폰 다운로드`,
+      icon: '🎁',
+      repeat: eventCount > 1,
+    }] : []),
+    ...(hasAutoDiscovery ? [{
+      label: '자동 탐색 쿠폰',
+      desc: `이벤트 목록 자동 순회 → 키워드 ${parsedKeywords.length}개로 쿠폰 탐색`,
+      icon: '🔍',
+      repeat: true,
+    }] : []),
+    ...(config.detail_coupon_selector.trim() ? [{
+      label: '상품상세 쿠폰',
+      desc: `상품 ${productCount}건 상세페이지 → 쿠폰 다운로드`,
+      icon: '🎫',
+      repeat: productCount > 1,
+    }] : []),
+    { label: '완료', desc: '쿠키 저장 → 결과 JSON 출력', icon: '✅', terminal: true },
+  ]
+
+  return (
+    <div>
+      <p className="config-section-desc">
+        이벤트 페이지와 상품 상세에서 쿠폰을 다운로드합니다.
+        주문서 수집 전에 실행하면 쿠키를 공유하여 할인 적용된 결제정보를 수집할 수 있습니다.
+      </p>
+
+      <div className="product-config-section active" style={{marginTop:12}}>
+        <div className="config-section-title">수집 워크플로우</div>
+        <div className="order-workflow">
+          {workflowSteps.map((s, i) => (
+            <div key={i} className="order-workflow-step">
+              <div className={`order-workflow-node${s.terminal ? ' terminal' : ''}`}>
+                <span className="order-workflow-num">{s.icon || (i + 1)}</span>
+                <div className="order-workflow-label">
+                  {s.label}
+                  {s.repeat && <span className="order-workflow-loop">↻ 반복</span>}
+                </div>
+                <div className="order-workflow-desc">{s.desc}</div>
+              </div>
+              {i < workflowSteps.length - 1 && (
+                <div className="order-workflow-arrow">→</div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── 이벤트 쿠폰 URL 관리 ── */}
+      <div className="product-config-section active" style={{marginTop:12}}>
+        <div className="config-section-title">
+          이벤트 페이지 쿠폰
+          <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:8}}>
+            ({eventCount}건 등록)
+          </span>
+        </div>
+        <p className="config-section-desc">
+          쿠폰 다운로드가 필요한 이벤트 페이지 URL과 쿠폰 버튼 텍스트/셀렉터를 등록합니다.
+          (#, . 으로 시작하면 CSS 셀렉터, 그 외에는 텍스트 매칭)
+        </p>
+
+        {config.event_coupons.length > 0 && (
+          <div style={{marginTop:8,display:'flex',flexDirection:'column',gap:6}}>
+            {config.event_coupons.map((ec, i) => (
+              <div key={i} style={{
+                display:'flex', alignItems:'center', gap:8,
+                padding:'6px 10px', background:'var(--bg-secondary)',
+                borderRadius:6, border:'1px solid var(--border)', fontSize:12,
+              }}>
+                <div style={{flex:1,overflow:'hidden'}}>
+                  <div style={{fontWeight:500,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                    {ec.url}
+                  </div>
+                  <div style={{color:'var(--text-secondary)',fontSize:11,marginTop:2}}>
+                    버튼: {ec.selector}
+                  </div>
+                </div>
+                <button
+                  className="btn btn-outline btn-sm"
+                  style={{fontSize:11,padding:'2px 8px',flexShrink:0,color:'var(--danger, #d33)'}}
+                  onClick={() => removeEventCoupon(i)}
+                >
+                  삭제
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{display:'flex',gap:6,marginTop:8,alignItems:'flex-end'}}>
+          <div style={{flex:2}}>
+            <label style={{fontSize:11,color:'var(--text-secondary)'}}>이벤트 페이지 URL</label>
+            <input
+              className="form-control"
+              placeholder="https://kor.lottedfs.com/kr/event/..."
+              value={newEventUrl}
+              onChange={e => setNewEventUrl(e.target.value)}
+              style={{fontSize:12,marginTop:2}}
+            />
+          </div>
+          <div style={{flex:1}}>
+            <label style={{fontSize:11,color:'var(--text-secondary)'}}>쿠폰 버튼</label>
+            <input
+              className="form-control"
+              placeholder="쿠폰 받기"
+              value={newEventSelector}
+              onChange={e => setNewEventSelector(e.target.value)}
+              style={{fontSize:12,marginTop:2}}
+            />
+          </div>
+          <button
+            className="btn btn-outline btn-sm"
+            style={{fontSize:11,padding:'6px 12px',flexShrink:0}}
+            disabled={!newEventUrl.trim() || !newEventSelector.trim() || eventCount >= MAX_EVENT_COUPONS}
+            onClick={addEventCoupon}
+          >
+            + 추가
+          </button>
+        </div>
+      </div>
+
+      {/* ── 이벤트 자동 탐색 쿠폰 ── */}
+      <div className="product-config-section active" style={{marginTop:12}}>
+        <div className="config-section-title" style={{display:'flex',alignItems:'center',gap:8}}>
+          🔍 이벤트 자동 탐색
+          {hasAutoDiscovery && (
+            <span style={{fontSize:11,color:'var(--success, #16a34a)',fontWeight:400}}>
+              활성 (키워드 {parsedKeywords.length}개)
+            </span>
+          )}
+        </div>
+        <p className="config-section-desc">
+          이벤트 목록 페이지를 자동 순회하여 쿠폰 버튼을 탐색합니다.
+          목록 진입 URL과 쿠폰 버튼 키워드를 등록하면 자동으로 하위 이벤트 페이지를 방문합니다.
+        </p>
+        <div style={{display:'flex',flexDirection:'column',gap:8,marginTop:8}}>
+          <label style={{fontSize:12}}>
+            <span style={{color:'var(--text-secondary)'}}>이벤트 목록 진입 URL</span>
+            <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>(하위 이벤트 링크가 있는 페이지)</span>
+            <input
+              className="form-control"
+              placeholder="https://kor.lottedfs.com/kr/event/eventDetail?evtDispNo=1044712"
+              value={config.event_list_url}
+              onChange={e => setConfig(c => ({...c, event_list_url: e.target.value}))}
+              style={{marginTop:4,fontSize:12}}
+            />
+          </label>
+          <div style={{fontSize:12}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
+              <div>
+                <span style={{color:'var(--text-secondary)'}}>쿠폰 버튼 키워드</span>
+                <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>
+                  (엔터로 구분, 버튼 텍스트 매칭용)
+                </span>
+              </div>
+              <span style={{fontSize:11,color:'var(--text-secondary)'}}>
+                등록 {parsedKeywords.length}건
+              </span>
+            </div>
+            <textarea
+              className="form-control"
+              placeholder={'쿠폰 다운로드\n혜택받기\n쿠폰받기\n다운받기'}
+              value={keywordsText}
+              onChange={e => setKeywordsText(e.target.value)}
+              rows={4}
+              spellCheck={false}
+              style={{
+                marginTop:4,fontSize:12,fontFamily:'monospace',
+                resize:'vertical',minHeight:60,
+              }}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* ── 상품상세 쿠폰 ── */}
+      <div className="product-config-section active" style={{marginTop:12}}>
+        <div className="config-section-title">상품상세 쿠폰</div>
+        <p className="config-section-desc">
+          상품 상세페이지에서 쿠폰을 다운로드할 버튼의 텍스트나 CSS 셀렉터를 입력합니다.
+          비워두면 상품상세 쿠폰 다운로드를 건너뜁니다.
+        </p>
+        <input
+          className="form-control"
+          placeholder="오늘의 혜택받기 또는 .benefit-btn"
+          value={config.detail_coupon_selector}
+          onChange={e => setConfig(c => ({...c, detail_coupon_selector: e.target.value}))}
+          style={{marginTop:4,fontSize:12}}
+        />
+      </div>
+
+      {/* ── 페이지 URL ── */}
+      <div className="product-config-section active" style={{marginTop:12}}>
+        <div className="config-section-title">페이지 URL</div>
+        <div style={{display:'flex',flexDirection:'column',gap:8,marginTop:8}}>
+          <label style={{fontSize:12}}>
+            <span style={{color:'var(--text-secondary)'}}>로그인 URL</span>
+            <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>(비워두면 사이트 URL 사용)</span>
+            <input
+              className="form-control"
+              placeholder="https://kor.lottedfs.com/kr/login"
+              value={config.login_url}
+              onChange={e => setConfig(c => ({...c, login_url: e.target.value}))}
+              style={{marginTop:4,fontSize:12}}
+            />
+          </label>
+          <label style={{fontSize:12}}>
+            <span style={{color:'var(--text-secondary)'}}>LPS 로그인 URL</span>
+            <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>(서브도메인 로그인, 비워두면 자동감지)</span>
+            <input
+              className="form-control"
+              placeholder="https://kor.lps.lottedfs.com/kr/member/login"
+              value={config.lps_login_url}
+              onChange={e => setConfig(c => ({...c, lps_login_url: e.target.value}))}
+              style={{marginTop:4,fontSize:12}}
+            />
+          </label>
+          <label style={{fontSize:12}}>
+            <span style={{color:'var(--text-secondary)'}}>상품상세 URL</span>
+            <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>{'(상품코드 위치에 {prdNo} 사용)'}</span>
+            <input
+              className="form-control"
+              placeholder="https://kor.lottedfs.com/kr/product/productDetail?prdNo={prdNo}"
+              value={config.product_detail_url_template}
+              onChange={e => setConfig(c => ({...c, product_detail_url_template: e.target.value}))}
+              style={{marginTop:4,fontSize:12}}
+            />
+          </label>
+          <div style={{fontSize:12}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
+              <div>
+                <span style={{color:'var(--text-secondary)'}}>상품코드</span>
+                <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>
+                  (엔터로 구분, 쿠폰 다운로드 대상)
+                </span>
+              </div>
+              <span style={{fontSize:11,color:'var(--text-secondary)'}}>
+                등록 {parsedCodes.length.toLocaleString()}건
+              </span>
+            </div>
+            <textarea
+              className="form-control"
+              placeholder={'20000996458\n20000996459\n...'}
+              value={codesText}
+              onChange={e => setCodesText(e.target.value)}
+              rows={5}
+              spellCheck={false}
+              style={{
+                marginTop:4,fontSize:12,fontFamily:'monospace',
+                resize:'vertical',minHeight:80,
+              }}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* ── 로그인 폼 셀렉터 ── */}
+      <div className="product-config-section active" style={{marginTop:12}}>
+        <div className="config-section-title">로그인 폼 셀렉터 (선택)</div>
+        <p className="config-section-desc">비워두면 자동 탐지합니다. 로그인 실패 시 수동 지정하세요.</p>
+        <div className="order-selector-grid">
+          <label>
+            <span>ID 입력 셀렉터</span>
+            <input className="form-control" placeholder="#userId"
+              value={config.login_config.id_selector || ''}
+              onChange={e => setConfig(c => ({...c, login_config: {...c.login_config, id_selector: e.target.value}}))}
+            />
+          </label>
+          <label>
+            <span>비밀번호 셀렉터</span>
+            <input className="form-control" placeholder="#password"
+              value={config.login_config.pwd_selector || ''}
+              onChange={e => setConfig(c => ({...c, login_config: {...c.login_config, pwd_selector: e.target.value}}))}
+            />
+          </label>
+          <label>
+            <span>로그인 버튼 셀렉터</span>
+            <input className="form-control" placeholder="#loginBtn"
+              value={config.login_config.submit_selector || ''}
+              onChange={e => setConfig(c => ({...c, login_config: {...c.login_config, submit_selector: e.target.value}}))}
+            />
+          </label>
+          <label>
+            <span>로그인 성공 지표</span>
+            <input className="form-control" placeholder=".my-page, .logout"
+              value={config.login_config.success_indicator || ''}
+              onChange={e => setConfig(c => ({...c, login_config: {...c.login_config, success_indicator: e.target.value}}))}
+            />
+          </label>
+        </div>
+      </div>
+
+      <div style={{textAlign:'right',marginTop:16}}>
+        <button className="btn btn-primary" onClick={handleSave}>저장</button>
+      </div>
+    </div>
+  )
+}
+
+
+function OrderConfig({ site, onSaved, showConfirm, closeConfirm, fieldDefs }) {
+  const collectFieldDefs = fieldDefs.filter(f => f.config_key === 'collect_fields')
+  const allFieldKeys = collectFieldDefs.map(f => f.key)
+
+  const [config, setConfig] = useState(() => {
+    const c = site.config || {}
+    return {
+      login_url: c.login_url || '',
+      product_detail_url_template: c.product_detail_url_template || '',
+      order_url: c.order_url || '',
+      product_codes: Array.isArray(c.product_codes) ? c.product_codes : [],
+      collect_payment: c.collect_payment !== false,
+      collect_fields: Array.isArray(c.collect_fields) ? c.collect_fields : [...allFieldKeys],
+      order_coupon_selector: c.order_coupon_selector || '',
+      lps_login_url: c.lps_login_url || '',
+      event_coupons: Array.isArray(c.event_coupons) ? c.event_coupons : [],
+      event_list_url: c.event_list_url || '',
+      coupon_keywords: Array.isArray(c.coupon_keywords) ? c.coupon_keywords : [],
+      detail_coupon_selector: c.detail_coupon_selector || '',
+      login_config: {
+        id_selector: '', pwd_selector: '', submit_selector: '', success_indicator: '',
+        ...(c.login_config || {}),
+      },
+    }
+  })
+  const [codesText, setCodesText] = useState(() => (config.product_codes || []).join('\n'))
+  const [keywordsText, setKeywordsText] = useState(() => (config.coupon_keywords || []).join('\n'))
+  const [newEventUrl, setNewEventUrl] = useState('')
+  const [newEventSelector, setNewEventSelector] = useState('')
+
+  const addEventCoupon = () => {
+    const url = newEventUrl.trim()
+    const sel = newEventSelector.trim()
+    if (!url || !sel) return
+    if (config.event_coupons.length >= MAX_EVENT_COUPONS) return
+    setConfig(c => ({
+      ...c,
+      event_coupons: [...c.event_coupons, { url, selector: sel }],
+    }))
+    setNewEventUrl('')
+    setNewEventSelector('')
+  }
+
+  const removeEventCoupon = (idx) => {
+    setConfig(c => ({
+      ...c,
+      event_coupons: c.event_coupons.filter((_, i) => i !== idx),
+    }))
+  }
+
+  const parsedCodes = useMemo(() => {
+    const seen = new Set()
+    const out = []
+    for (const line of codesText.split(/\r?\n/)) {
+      const t = line.trim()
+      if (!t || seen.has(t)) continue
+      seen.add(t)
+      out.push(t)
+      if (out.length >= MAX_PRODUCT_CODES) break
+    }
+    return out
+  }, [codesText])
+
+  const parsedKeywords = useMemo(() => {
+    const seen = new Set()
+    const out = []
+    for (const line of keywordsText.split(/\r?\n/)) {
+      const t = line.trim()
+      if (!t || seen.has(t)) continue
+      seen.add(t)
+      out.push(t)
+    }
+    return out
+  }, [keywordsText])
 
   const rawLineCount = useMemo(
     () => codesText.split(/\r?\n/).filter(l => l.trim()).length,
@@ -2453,7 +2853,7 @@ function OrderConfig({ site, onSaved, showConfirm, closeConfirm }) {
       onConfirm: async () => {
         closeConfirm()
         try {
-          const payload = { ...config, product_codes: parsedCodes }
+          const payload = { ...config, product_codes: parsedCodes, coupon_keywords: parsedKeywords }
           const res = await fetch(`/api/sites/${site.id}/config`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -2469,31 +2869,77 @@ function OrderConfig({ site, onSaved, showConfirm, closeConfirm }) {
   }
 
   const productCount = parsedCodes.length
-  const workflowSteps = [
+  const hasOrderCoupon = !!config.order_coupon_selector.trim()
+  const hasEventCoupons = config.event_coupons.length > 0
+  const hasAutoDiscovery = !!(config.event_list_url.trim() && parsedKeywords.length > 0)
+  const hasDetailCoupon = !!config.detail_coupon_selector.trim()
+  const hasCouponPhase = hasEventCoupons || hasDetailCoupon || hasAutoDiscovery
+
+  /* ── 쿠폰 다운로드 Agent 영역 ── */
+  const couponSteps = [
+    ...(hasEventCoupons ? [{
+      label: '이벤트 쿠폰',
+      desc: `이벤트 페이지 ${config.event_coupons.length}건 → 쿠폰 다운로드`,
+      icon: '🎁',
+      repeat: config.event_coupons.length > 1,
+    }] : []),
+    ...(hasAutoDiscovery ? [{
+      label: '자동 탐색 쿠폰',
+      desc: `이벤트 목록 자동 순회 → 키워드 ${parsedKeywords.length}개로 쿠폰 탐색`,
+      icon: '🔍',
+      repeat: true,
+    }] : []),
+    ...(hasDetailCoupon ? [{
+      label: '상품상세 쿠폰',
+      desc: `상품 ${productCount}건 상세페이지 → 쿠폰 다운로드`,
+      icon: '🎫',
+      repeat: productCount > 1,
+    }] : []),
+  ]
+
+  /* ── 주문서 수집 Agent 영역 ── */
+  const orderSteps = [
+    { label: '상품상세', desc: '등록한 상품상세 URL로 순회', icon: '📦' },
     {
-      label: '로그인',
-      desc: '로그인 페이지 진입 → ID/비밀번호 입력 → 인증',
-    },
-    {
-      label: '상품상세',
-      desc: '등록한 상품상세 URL로 순회 이동',
-    },
-    {
-      label: '상품코드',
+      label: '바로구매',
       desc: `등록 ${productCount.toLocaleString()}건 × 바로구매 클릭`,
       repeat: productCount > 1,
+      icon: '🛒',
     },
+    ...(hasOrderCoupon ? [{
+      label: '주문서 쿠폰',
+      desc: '주문서 내 쿠폰 다운로드',
+      icon: '🏷️',
+    }] : []),
+    { label: '출입국 확인', desc: '출입국정보 등록 확인 → 미등록 시 스킵', icon: '✈️' },
     {
-      label: '주문서 수집',
-      desc: '주문서 도달 → 상품명·결제금액(USD/KRW)·할인율 추출',
+      label: '결제정보 수집',
+      desc: '상품명·결제금액(USD/KRW)·할인율 추출',
       repeat: productCount > 1,
+      icon: '💳',
     },
-    {
-      label: '로그아웃',
-      desc: '메인 홈으로 이동 → javascript:logout() 호출',
-      terminal: true,
-    },
+    { label: '로그아웃', desc: '메인 홈 이동 → logout() 호출', terminal: true, icon: '🚪' },
   ]
+
+  const renderSteps = (steps) => (
+    <div className="order-workflow">
+      {steps.map((s, i) => (
+        <div key={i} className="order-workflow-step">
+          <div className={`order-workflow-node${s.terminal ? ' terminal' : ''}`}>
+            <span className="order-workflow-num">{s.icon || (i + 1)}</span>
+            <div className="order-workflow-label">
+              {s.label}
+              {s.repeat && <span className="order-workflow-loop">↻ 반복</span>}
+            </div>
+            <div className="order-workflow-desc">{s.desc}</div>
+          </div>
+          {i < steps.length - 1 && (
+            <div className="order-workflow-arrow">→</div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
 
   return (
     <div>
@@ -2504,23 +2950,184 @@ function OrderConfig({ site, onSaved, showConfirm, closeConfirm }) {
 
       <div className="product-config-section active" style={{marginTop:12}}>
         <div className="config-section-title">수집 워크플로우</div>
-        <div className="order-workflow">
-          {workflowSteps.map((s, i) => (
-            <div key={i} className="order-workflow-step">
-              <div className={`order-workflow-node${s.terminal ? ' terminal' : ''}`}>
-                <span className="order-workflow-num">{i + 1}</span>
-                <div className="order-workflow-label">
-                  {s.label}
-                  {s.repeat && <span className="order-workflow-loop">↻ 반복</span>}
-                </div>
-                <div className="order-workflow-desc">{s.desc}</div>
-              </div>
-              {i < workflowSteps.length - 1 && (
-                <div className="order-workflow-arrow">→</div>
-              )}
-            </div>
-          ))}
+
+        {/* ── 공통: 로그인 ── */}
+        <div className="order-flow-login-bar">
+          <span className="order-flow-login-icon">🔑</span>
+          <span>로그인 (메인 + LPS 도메인, 1회)</span>
         </div>
+
+        {/* ── Phase 1: 쿠폰 다운로드 Agent ── */}
+        <div className={`order-flow-phase coupon-phase${hasCouponPhase ? '' : ' empty'}`}>
+          <div className="order-flow-phase-header">
+            <span className="badge coupon-badge" style={{fontSize:11}}>쿠폰 다운로드</span>
+            <span style={{fontSize:11,color:'var(--text-secondary)'}}>
+              {hasCouponPhase
+                ? '이벤트 페이지 + 상품상세 쿠폰 다운로드'
+                : '아래에서 쿠폰 설정을 등록하면 표시됩니다'}
+            </span>
+          </div>
+          {hasCouponPhase && renderSteps(couponSteps)}
+        </div>
+
+        {/* ── 연결 ── */}
+        <div className="order-flow-connector">
+          <div className="order-flow-connector-line" />
+          <span className="order-flow-connector-label">같은 세션</span>
+          <div className="order-flow-connector-line" />
+        </div>
+
+        {/* ── Phase 2: 주문서 수집 Agent ── */}
+        <div className="order-flow-phase order-phase">
+          <div className="order-flow-phase-header">
+            <span className="badge order-badge" style={{fontSize:11}}>주문서 수집</span>
+            <span style={{fontSize:11,color:'var(--text-secondary)'}}>바로구매 → 결제정보 수집</span>
+          </div>
+          {renderSteps(orderSteps)}
+        </div>
+      </div>
+
+      {/* ── 이벤트 페이지 쿠폰 (CouponAgent 설정) ── */}
+      <div className="product-config-section active" style={{marginTop:12}}>
+        <div className="config-section-title" style={{display:'flex',alignItems:'center',gap:8}}>
+          🎁 이벤트 페이지 쿠폰
+          <span style={{fontSize:11,color:'var(--text-secondary)',fontWeight:400}}>
+            ({config.event_coupons.length}건 등록)
+          </span>
+        </div>
+        <p className="config-section-desc">
+          쿠폰 다운로드가 필요한 이벤트 페이지 URL과 쿠폰 버튼의 텍스트 또는 CSS 셀렉터를 등록합니다.
+          (#, . 시작 = CSS 셀렉터, 그 외 = 텍스트 매칭). 비워두면 이벤트 쿠폰 단계를 건너뜁니다.
+        </p>
+
+        {config.event_coupons.length > 0 && (
+          <div style={{marginTop:8,display:'flex',flexDirection:'column',gap:6}}>
+            {config.event_coupons.map((ec, i) => (
+              <div key={i} style={{
+                display:'flex', alignItems:'center', gap:8,
+                padding:'6px 10px', background:'var(--bg-secondary)',
+                borderRadius:6, border:'1px solid var(--border)', fontSize:12,
+              }}>
+                <div style={{flex:1,overflow:'hidden'}}>
+                  <div style={{fontWeight:500,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                    {ec.url}
+                  </div>
+                  <div style={{color:'var(--text-secondary)',fontSize:11,marginTop:2}}>
+                    버튼: <code style={{background:'rgba(0,0,0,0.06)',padding:'1px 4px',borderRadius:3}}>{ec.selector}</code>
+                  </div>
+                </div>
+                <button
+                  className="btn btn-outline btn-sm"
+                  style={{fontSize:11,padding:'2px 8px',flexShrink:0,color:'var(--danger, #d33)'}}
+                  onClick={() => removeEventCoupon(i)}
+                >
+                  삭제
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{display:'flex',gap:6,marginTop:8,alignItems:'flex-end'}}>
+          <div style={{flex:2}}>
+            <label style={{fontSize:11,color:'var(--text-secondary)'}}>이벤트 페이지 URL</label>
+            <input
+              className="form-control"
+              placeholder="https://kor.lottedfs.com/kr/event/..."
+              value={newEventUrl}
+              onChange={e => setNewEventUrl(e.target.value)}
+              style={{fontSize:12,marginTop:2}}
+            />
+          </div>
+          <div style={{flex:1}}>
+            <label style={{fontSize:11,color:'var(--text-secondary)'}}>쿠폰 버튼</label>
+            <input
+              className="form-control"
+              placeholder="쿠폰 받기"
+              value={newEventSelector}
+              onChange={e => setNewEventSelector(e.target.value)}
+              style={{fontSize:12,marginTop:2}}
+            />
+          </div>
+          <button
+            className="btn btn-outline btn-sm"
+            style={{fontSize:11,padding:'6px 12px',flexShrink:0}}
+            disabled={!newEventUrl.trim() || !newEventSelector.trim() || config.event_coupons.length >= MAX_EVENT_COUPONS}
+            onClick={addEventCoupon}
+          >
+            + 추가
+          </button>
+        </div>
+      </div>
+
+      {/* ── 이벤트 자동 탐색 쿠폰 (CouponAgent 설정) ── */}
+      <div className="product-config-section active" style={{marginTop:12}}>
+        <div className="config-section-title" style={{display:'flex',alignItems:'center',gap:8}}>
+          🔍 이벤트 자동 탐색
+          {hasAutoDiscovery && (
+            <span style={{fontSize:11,color:'var(--success, #16a34a)',fontWeight:400}}>
+              활성 (키워드 {parsedKeywords.length}개)
+            </span>
+          )}
+        </div>
+        <p className="config-section-desc">
+          이벤트 목록 페이지를 자동 순회하여 쿠폰 버튼을 탐색합니다.
+          목록 진입 URL과 쿠폰 버튼 키워드를 등록하면 자동으로 하위 이벤트 페이지를 방문합니다.
+        </p>
+        <div style={{display:'flex',flexDirection:'column',gap:8,marginTop:8}}>
+          <label style={{fontSize:12}}>
+            <span style={{color:'var(--text-secondary)'}}>이벤트 목록 진입 URL</span>
+            <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>(하위 이벤트 링크가 있는 페이지)</span>
+            <input
+              className="form-control"
+              placeholder="https://kor.lottedfs.com/kr/event/eventDetail?evtDispNo=1044712"
+              value={config.event_list_url}
+              onChange={e => setConfig(c => ({...c, event_list_url: e.target.value}))}
+              style={{marginTop:4,fontSize:12}}
+            />
+          </label>
+          <div style={{fontSize:12}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
+              <div>
+                <span style={{color:'var(--text-secondary)'}}>쿠폰 버튼 키워드</span>
+                <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>
+                  (엔터로 구분, 버튼 텍스트 매칭용)
+                </span>
+              </div>
+              <span style={{fontSize:11,color:'var(--text-secondary)'}}>
+                등록 {parsedKeywords.length}건
+              </span>
+            </div>
+            <textarea
+              className="form-control"
+              placeholder={'쿠폰 다운로드\n혜택받기\n쿠폰받기\n다운받기'}
+              value={keywordsText}
+              onChange={e => setKeywordsText(e.target.value)}
+              rows={4}
+              spellCheck={false}
+              style={{
+                marginTop:4,fontSize:12,fontFamily:'monospace',
+                resize:'vertical',minHeight:60,
+              }}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* ── 상품상세 쿠폰 (CouponAgent 설정) ── */}
+      <div className="product-config-section active" style={{marginTop:12}}>
+        <div className="config-section-title">🎫 상품상세 쿠폰</div>
+        <p className="config-section-desc">
+          상품 상세페이지에서 쿠폰을 다운로드할 버튼의 텍스트나 CSS 셀렉터를 입력합니다.
+          비워두면 상품상세 쿠폰 다운로드를 건너뜁니다.
+        </p>
+        <input
+          className="form-control"
+          placeholder="오늘의 혜택받기 또는 .benefit-btn"
+          value={config.detail_coupon_selector}
+          onChange={e => setConfig(c => ({...c, detail_coupon_selector: e.target.value}))}
+          style={{marginTop:4,fontSize:12}}
+        />
       </div>
 
       <div className="product-config-section active" style={{marginTop:12}}>
@@ -2590,21 +3197,69 @@ function OrderConfig({ site, onSaved, showConfirm, closeConfirm }) {
               style={{marginTop:4,fontSize:12}}
             />
           </label>
+          <label style={{fontSize:12}}>
+            <span style={{color:'var(--text-secondary)'}}>LPS 로그인 URL</span>
+            <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>(서브도메인 로그인, 비워두면 자동감지)</span>
+            <input
+              className="form-control"
+              placeholder="https://kor.lps.lottedfs.com/kr/member/login"
+              value={config.lps_login_url}
+              onChange={e => setConfig(c => ({...c, lps_login_url: e.target.value}))}
+              style={{marginTop:4,fontSize:12}}
+            />
+          </label>
         </div>
       </div>
 
       <div className="product-config-section active" style={{marginTop:12}}>
-        <div className="config-section-title">수집 항목</div>
-        <div style={{display:'flex',flexDirection:'column',gap:8,marginTop:8}}>
-          <label className="order-toggle-row">
-            <input type="checkbox" checked={config.collect_payment}
-              onChange={e => setConfig(c => ({...c, collect_payment: e.target.checked}))}
-            />
-            <div>
-              <strong>결제정보 수집</strong>
-              <span className="config-section-desc" style={{margin:0}}>정상가, 할인, 혜택, 결제금액, 면세한도, 적립 포인트</span>
-            </div>
-          </label>
+        <div className="config-section-title">주문서 쿠폰 다운로드</div>
+        <p className="config-section-desc">
+          주문서 페이지에서 쿠폰을 다운로드할 버튼의 텍스트나 CSS 셀렉터를 입력합니다.
+          비워두면 쿠폰 다운로드를 건너뜁니다. (#, . 으로 시작하면 CSS 셀렉터, 그 외에는 텍스트 매칭
+        </p>
+        <input
+          className="form-control"
+          placeholder="쿠폰 다운로드 또는 .coupon-download-btn"
+          value={config.order_coupon_selector}
+          onChange={e => setConfig(c => ({...c, order_coupon_selector: e.target.value}))}
+          style={{marginTop:4,fontSize:12}}
+        />
+      </div>
+
+      <div className="product-config-section active" style={{marginTop:12}}>
+        <div className="config-section-title" style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <span>수집 항목 ({config.collect_fields.length}/{collectFieldDefs.length})</span>
+          <div style={{display:'flex',gap:6}}>
+            <button type="button" className="btn btn-sm"
+              style={{fontSize:11,padding:'2px 8px'}}
+              onClick={() => setConfig(c => ({...c, collect_fields: [...allFieldKeys]}))}
+            >전체선택</button>
+            <button type="button" className="btn btn-sm"
+              style={{fontSize:11,padding:'2px 8px'}}
+              onClick={() => setConfig(c => ({...c, collect_fields: []}))}
+            >전체해제</button>
+          </div>
+        </div>
+        <div className="field-checkbox-grid" style={{marginTop:8}}>
+          {collectFieldDefs.map(f => {
+            const checked = config.collect_fields.includes(f.key)
+            return (
+              <label key={f.key}
+                className={`field-checkbox ${checked ? 'checked' : ''}`}
+                title={f.group}
+              >
+                <input type="checkbox" checked={checked}
+                  onChange={() => setConfig(c => ({
+                    ...c,
+                    collect_fields: checked
+                      ? c.collect_fields.filter(k => k !== f.key)
+                      : [...c.collect_fields, f.key],
+                  }))}
+                />
+                <span>{f.label}</span>
+              </label>
+            )
+          })}
         </div>
       </div>
 
@@ -2654,16 +3309,9 @@ function OrderConfig({ site, onSaved, showConfirm, closeConfirm }) {
 /* ─── 체크 상태 → crawl_config 변환 ─── */
 function buildCrawlConfig(agentType, checked) {
   if (agentType === 'product') {
-    const basicKeys = COLLECT_ITEMS_BY_AGENT.product.fields.filter(f => f.group === 'basic').map(f => f.key)
-    const collect_fields = []
-    const optional_fields = []
-    Object.entries(checked.fields).forEach(([key, val]) => {
-      if (!val) return
-      if (basicKeys.includes(key)) collect_fields.push(key)
-      else optional_fields.push(key)
-    })
+    const collect_fields = Object.entries(checked.fields).filter(([,v]) => v).map(([k]) => k)
     return {
-      collect_fields, optional_fields,
+      collect_fields,
       list_type: checked.listType || 'catalog',
       pagination: checked.pagination || 'scroll',
       max_pages: 5, max_items: 100,
@@ -2694,7 +3342,10 @@ function buildCrawlConfig(agentType, checked) {
 }
 
 
-function AddSiteModal({ categories, onClose, onSaved, showConfirm, closeConfirm }) {
+function AddSiteModal({ categories, onClose, onSaved, showConfirm, closeConfirm, agentFieldDefs }) {
+  const orderFieldDefs = (agentFieldDefs['order'] || []).filter(f => f.config_key === 'collect_fields')
+  const allFieldKeys = orderFieldDefs.map(f => f.key)
+  const collectFieldDefs = orderFieldDefs
   const agentTypeFromCategory = (cat) => {
     const c = (cat || '').trim()
     if (c === '뉴스') return 'news'
@@ -2703,13 +3354,14 @@ function AddSiteModal({ categories, onClose, onSaved, showConfirm, closeConfirm 
     if (c === '경쟁사배너') return 'banner'
     if (c === '브랜드목록') return 'directory'
     if (c === '주문서') return 'order'
+    if (c === '쿠폰') return 'coupon'
     return 'product'
   }
 
   const AGENT_TYPE_LABELS = {
     product: '상품 수집', news: '뉴스 기사', cafe: '카페 게시글',
     promotion: '이벤트 수집', banner: '배너 수집', directory: '목록 수집',
-    order: '주문서 수집',
+    order: '주문서 수집', coupon: '쿠폰 다운로드',
   }
 
   const initCat = categories[0] || ''
@@ -2729,6 +3381,79 @@ function AddSiteModal({ categories, onClose, onSaved, showConfirm, closeConfirm 
   const [analyzeResult, setAnalyzeResult] = useState(null)
   const [discoveredFields, setDiscoveredFields] = useState([])
   const [discoveredChecked, setDiscoveredChecked] = useState({})
+
+  /* ── 주문서(order) 전용 상태 ── */
+  const [orderConfig, setOrderConfig] = useState({
+    login_url: '',
+    product_detail_url_template: '',
+    order_url: '',
+    product_codes: [],
+    collect_payment: true,
+    collect_fields: [...allFieldKeys],
+    order_coupon_selector: '',
+    lps_login_url: '',
+    event_coupons: [],
+    event_list_url: '',
+    coupon_keywords: [],
+    detail_coupon_selector: '',
+    login_config: { id_selector: '', pwd_selector: '', submit_selector: '', success_indicator: '' },
+  })
+  const [orderCodesText, setOrderCodesText] = useState('')
+  const [orderKeywordsText, setOrderKeywordsText] = useState('')
+  const [newEventUrl, setNewEventUrl] = useState('')
+  const [newEventSelector, setNewEventSelector] = useState('')
+
+  const addEventCoupon = () => {
+    const url = newEventUrl.trim()
+    const sel = newEventSelector.trim()
+    if (!url || !sel) return
+    if (orderConfig.event_coupons.length >= MAX_EVENT_COUPONS) return
+    setOrderConfig(c => ({
+      ...c,
+      event_coupons: [...c.event_coupons, { url, selector: sel }],
+    }))
+    setNewEventUrl('')
+    setNewEventSelector('')
+  }
+
+  const removeEventCoupon = (idx) => {
+    setOrderConfig(c => ({
+      ...c,
+      event_coupons: c.event_coupons.filter((_, i) => i !== idx),
+    }))
+  }
+
+  const orderParsedCodes = useMemo(() => {
+    const seen = new Set()
+    const out = []
+    for (const line of orderCodesText.split(/\r?\n/)) {
+      const t = line.trim()
+      if (!t || seen.has(t)) continue
+      seen.add(t)
+      out.push(t)
+      if (out.length >= MAX_PRODUCT_CODES) break
+    }
+    return out
+  }, [orderCodesText])
+
+  const orderParsedKeywords = useMemo(() => {
+    const seen = new Set()
+    const out = []
+    for (const line of orderKeywordsText.split(/\r?\n/)) {
+      const t = line.trim()
+      if (!t || seen.has(t)) continue
+      seen.add(t)
+      out.push(t)
+    }
+    return out
+  }, [orderKeywordsText])
+
+  const orderRawLineCount = useMemo(
+    () => orderCodesText.split(/\r?\n/).filter(l => l.trim()).length,
+    [orderCodesText],
+  )
+  const orderOverLimit = orderRawLineCount > MAX_PRODUCT_CODES
+  const orderDupCount = orderRawLineCount - orderParsedCodes.length - Math.max(0, orderRawLineCount - MAX_PRODUCT_CODES)
 
   const handleCategoryChange = (cat) => {
     const agentType = agentTypeFromCategory(cat)
@@ -2827,21 +3552,31 @@ function AddSiteModal({ categories, onClose, onSaved, showConfirm, closeConfirm 
   const handleSave = () => {
     if (!form.site_name || !form.site_url) return
     const agentLabel = AGENT_TYPE_LABELS[form.agent_type] || form.agent_type
-    const crawl_config = buildCrawlConfig(form.agent_type, checked)
 
-    /* 발견된 추가 필드 중 체크된 것을 extra_fields로 추가 */
-    const extraFields = discoveredFields
-      .filter(f => discoveredChecked[f.standard_key])
-      .map(f => ({ raw_key: f.raw_key, standard_key: f.standard_key, label: f.label }))
-    if (extraFields.length > 0) {
-      crawl_config.extra_fields = extraFields
+    let crawl_config
+    if (form.agent_type === 'order') {
+      crawl_config = { ...orderConfig, product_codes: orderParsedCodes, coupon_keywords: orderParsedKeywords }
+    } else {
+      crawl_config = buildCrawlConfig(form.agent_type, checked)
+      /* 발견된 추가 필드 중 체크된 것을 extra_fields로 추가 */
+      const extraFields = discoveredFields
+        .filter(f => discoveredChecked[f.standard_key])
+        .map(f => ({ raw_key: f.raw_key, standard_key: f.standard_key, label: f.label }))
+      if (extraFields.length > 0) {
+        crawl_config.extra_fields = extraFields
+      }
     }
 
-    const totalFields = checkedFieldCount + discoveredCheckedCount
+    const totalFields = form.agent_type === 'order'
+      ? orderParsedCodes.length
+      : checkedFieldCount + discoveredCheckedCount
+    const detailText = form.agent_type === 'order'
+      ? `카테고리: ${form.category || '미분류'} | 수집 유형: ${agentLabel} | 상품코드: ${orderParsedCodes.length}건`
+      : `카테고리: ${form.category || '미분류'} | 수집 유형: ${agentLabel} | 수집 항목: ${totalFields}개`
     showConfirm({
       title: '사이트 추가',
       message: `"${form.site_name}" 사이트를 추가하시겠습니까?`,
-      detail: `카테고리: ${form.category || '미분류'} | 수집 유형: ${agentLabel} | 수집 항목: ${totalFields}개`,
+      detail: detailText,
       confirmLabel: '추가',
       onConfirm: async () => {
         closeConfirm()
@@ -2866,7 +3601,7 @@ function AddSiteModal({ categories, onClose, onSaved, showConfirm, closeConfirm 
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" style={{maxWidth: spec ? 640 : 520}} onClick={e => e.stopPropagation()}>
+      <div className="modal" style={{maxWidth: form.agent_type === 'order' ? 680 : spec ? 640 : 520}} onClick={e => e.stopPropagation()}>
         <div className="modal-header">
           <h3>새 사이트 추가</h3>
           <button className="modal-close" onClick={onClose}>x</button>
@@ -3009,8 +3744,420 @@ function AddSiteModal({ categories, onClose, onSaved, showConfirm, closeConfirm 
             </div>
           </div>
 
+          {/* ── 주문서(order) 전용 설정 ── */}
+          {form.agent_type === 'order' && (
+            <div style={{marginTop:12}}>
+              {/* ── 워크플로우 시각화 ── */}
+              <div className="product-config-section active" style={{marginTop:0}}>
+                <div className="config-section-title">수집 워크플로우</div>
+
+                <div className="order-flow-login-bar">
+                  <span className="order-flow-login-icon">🔑</span>
+                  <span>로그인 (메인 + LPS 도메인, 1회)</span>
+                </div>
+
+                {(() => {
+                  const hasEventCoupons = orderConfig.event_coupons.length > 0
+                  const hasAutoDiscovery = !!(orderConfig.event_list_url.trim() && orderParsedKeywords.length > 0)
+                  const hasDetailCoupon = !!orderConfig.detail_coupon_selector.trim()
+                  const hasCouponPhase = hasEventCoupons || hasDetailCoupon || hasAutoDiscovery
+                  const hasOrderCoupon = !!orderConfig.order_coupon_selector.trim()
+                  const productCount = orderParsedCodes.length
+
+                  const couponSteps = [
+                    ...(hasEventCoupons ? [{
+                      label: '이벤트 쿠폰', icon: '🎁',
+                      desc: `이벤트 페이지 ${orderConfig.event_coupons.length}건 → 쿠폰 다운로드`,
+                      repeat: orderConfig.event_coupons.length > 1,
+                    }] : []),
+                    ...(hasAutoDiscovery ? [{
+                      label: '자동 탐색 쿠폰', icon: '🔍',
+                      desc: `이벤트 목록 자동 순회 → 키워드 ${orderParsedKeywords.length}개로 쿠폰 탐색`,
+                      repeat: true,
+                    }] : []),
+                    ...(hasDetailCoupon ? [{
+                      label: '상품상세 쿠폰', icon: '🎫',
+                      desc: `상품 ${productCount}건 상세페이지 → 쿠폰 다운로드`,
+                      repeat: productCount > 1,
+                    }] : []),
+                  ]
+
+                  const orderSteps = [
+                    { label: '상품상세', desc: '등록한 상품상세 URL로 순회', icon: '📦' },
+                    { label: '바로구매', desc: `등록 ${productCount.toLocaleString()}건 × 바로구매 클릭`, repeat: productCount > 1, icon: '🛒' },
+                    ...(hasOrderCoupon ? [{ label: '주문서 쿠폰', desc: '주문서 내 쿠폰 다운로드', icon: '🏷️' }] : []),
+                    { label: '출입국 확인', desc: '출입국정보 등록 확인 → 미등록 시 스킵', icon: '✈️' },
+                    { label: '결제정보 수집', desc: '상품명·결제금액(USD/KRW)·할인율 추출', repeat: productCount > 1, icon: '💳' },
+                    { label: '로그아웃', desc: '메인 홈 이동 → logout() 호출', terminal: true, icon: '🚪' },
+                  ]
+
+                  const renderSteps = (steps) => (
+                    <div className="order-workflow">
+                      {steps.map((s, i) => (
+                        <div key={i} className="order-workflow-step">
+                          <div className={`order-workflow-node${s.terminal ? ' terminal' : ''}`}>
+                            <span className="order-workflow-num">{s.icon || (i + 1)}</span>
+                            <div className="order-workflow-label">
+                              {s.label}
+                              {s.repeat && <span className="order-workflow-loop">↻ 반복</span>}
+                            </div>
+                            <div className="order-workflow-desc">{s.desc}</div>
+                          </div>
+                          {i < steps.length - 1 && <div className="order-workflow-arrow">→</div>}
+                        </div>
+                      ))}
+                    </div>
+                  )
+
+                  return (
+                    <>
+                      <div className={`order-flow-phase coupon-phase${hasCouponPhase ? '' : ' empty'}`}>
+                        <div className="order-flow-phase-header">
+                          <span className="badge coupon-badge" style={{fontSize:11}}>쿠폰 다운로드</span>
+                          <span style={{fontSize:11,color:'var(--text-secondary)'}}>
+                            {hasCouponPhase
+                              ? '이벤트 페이지 + 상품상세 쿠폰 다운로드'
+                              : '아래에서 쿠폰 설정을 등록하면 표시됩니다'}
+                          </span>
+                        </div>
+                        {hasCouponPhase && renderSteps(couponSteps)}
+                      </div>
+
+                      <div className="order-flow-connector">
+                        <div className="order-flow-connector-line" />
+                        <span className="order-flow-connector-label">같은 세션</span>
+                        <div className="order-flow-connector-line" />
+                      </div>
+
+                      <div className="order-flow-phase order-phase">
+                        <div className="order-flow-phase-header">
+                          <span className="badge order-badge" style={{fontSize:11}}>주문서 수집</span>
+                          <span style={{fontSize:11,color:'var(--text-secondary)'}}>바로구매 → 결제정보 수집</span>
+                        </div>
+                        {renderSteps(orderSteps)}
+                      </div>
+                    </>
+                  )
+                })()}
+              </div>
+
+              {/* ── 이벤트 페이지 쿠폰 ── */}
+              <div className="product-config-section active" style={{marginTop:12}}>
+                <div className="config-section-title" style={{display:'flex',alignItems:'center',gap:8}}>
+                  🎁 이벤트 페이지 쿠폰
+                  <span style={{fontSize:11,color:'var(--text-secondary)',fontWeight:400}}>
+                    ({orderConfig.event_coupons.length}건 등록)
+                  </span>
+                </div>
+                <p className="config-section-desc">
+                  쿠폰 다운로드가 필요한 이벤트 페이지 URL과 쿠폰 버튼의 텍스트 또는 CSS 셀렉터를 등록합니다.
+                  (#, . 시작 = CSS 셀렉터, 그 외 = 텍스트 매칭). 비워두면 이벤트 쿠폰 단계를 건너뜁니다.
+                </p>
+
+                {orderConfig.event_coupons.length > 0 && (
+                  <div style={{marginTop:8,display:'flex',flexDirection:'column',gap:6}}>
+                    {orderConfig.event_coupons.map((ec, i) => (
+                      <div key={i} style={{
+                        display:'flex', alignItems:'center', gap:8,
+                        padding:'6px 10px', background:'var(--bg-secondary)',
+                        borderRadius:6, border:'1px solid var(--border)', fontSize:12,
+                      }}>
+                        <div style={{flex:1,overflow:'hidden'}}>
+                          <div style={{fontWeight:500,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                            {ec.url}
+                          </div>
+                          <div style={{color:'var(--text-secondary)',fontSize:11,marginTop:2}}>
+                            버튼: <code style={{background:'rgba(0,0,0,0.06)',padding:'1px 4px',borderRadius:3}}>{ec.selector}</code>
+                          </div>
+                        </div>
+                        <button
+                          className="btn btn-outline btn-sm"
+                          style={{fontSize:11,padding:'2px 8px',flexShrink:0,color:'var(--danger, #d33)'}}
+                          onClick={() => removeEventCoupon(i)}
+                        >
+                          삭제
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div style={{display:'flex',gap:6,marginTop:8,alignItems:'flex-end'}}>
+                  <div style={{flex:2}}>
+                    <label style={{fontSize:11,color:'var(--text-secondary)'}}>이벤트 페이지 URL</label>
+                    <input
+                      className="form-control"
+                      placeholder="https://kor.lottedfs.com/kr/event/..."
+                      value={newEventUrl}
+                      onChange={e => setNewEventUrl(e.target.value)}
+                      style={{fontSize:12,marginTop:2}}
+                    />
+                  </div>
+                  <div style={{flex:1}}>
+                    <label style={{fontSize:11,color:'var(--text-secondary)'}}>쿠폰 버튼</label>
+                    <input
+                      className="form-control"
+                      placeholder="쿠폰 받기"
+                      value={newEventSelector}
+                      onChange={e => setNewEventSelector(e.target.value)}
+                      style={{fontSize:12,marginTop:2}}
+                    />
+                  </div>
+                  <button
+                    className="btn btn-outline btn-sm"
+                    style={{fontSize:11,padding:'6px 12px',flexShrink:0}}
+                    disabled={!newEventUrl.trim() || !newEventSelector.trim() || orderConfig.event_coupons.length >= MAX_EVENT_COUPONS}
+                    onClick={addEventCoupon}
+                  >
+                    + 추가
+                  </button>
+                </div>
+              </div>
+
+              {/* ── 이벤트 자동 탐색 ── */}
+              <div className="product-config-section active" style={{marginTop:12}}>
+                <div className="config-section-title" style={{display:'flex',alignItems:'center',gap:8}}>
+                  🔍 이벤트 자동 탐색
+                  {orderConfig.event_list_url.trim() && orderParsedKeywords.length > 0 && (
+                    <span style={{fontSize:11,color:'var(--success, #16a34a)',fontWeight:400}}>
+                      활성 (키워드 {orderParsedKeywords.length}개)
+                    </span>
+                  )}
+                </div>
+                <p className="config-section-desc">
+                  이벤트 목록 페이지를 자동 순회하여 쿠폰 버튼을 탐색합니다.
+                </p>
+                <div style={{display:'flex',flexDirection:'column',gap:8,marginTop:8}}>
+                  <label style={{fontSize:12}}>
+                    <span style={{color:'var(--text-secondary)'}}>이벤트 목록 진입 URL</span>
+                    <input
+                      className="form-control"
+                      placeholder="https://kor.lottedfs.com/kr/event/eventDetail?evtDispNo=1044712"
+                      value={orderConfig.event_list_url}
+                      onChange={e => setOrderConfig(c => ({...c, event_list_url: e.target.value}))}
+                      style={{marginTop:4,fontSize:12}}
+                    />
+                  </label>
+                  <div style={{fontSize:12}}>
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
+                      <div>
+                        <span style={{color:'var(--text-secondary)'}}>쿠폰 버튼 키워드</span>
+                        <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>
+                          (엔터로 구분)
+                        </span>
+                      </div>
+                      <span style={{fontSize:11,color:'var(--text-secondary)'}}>
+                        등록 {orderParsedKeywords.length}건
+                      </span>
+                    </div>
+                    <textarea
+                      className="form-control"
+                      placeholder={'쿠폰 다운로드\n혜택받기\n쿠폰받기\n다운받기'}
+                      value={orderKeywordsText}
+                      onChange={e => setOrderKeywordsText(e.target.value)}
+                      rows={4}
+                      spellCheck={false}
+                      style={{
+                        marginTop:4,fontSize:12,fontFamily:'monospace',
+                        resize:'vertical',minHeight:60,
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* ── 상품상세 쿠폰 ── */}
+              <div className="product-config-section active" style={{marginTop:12}}>
+                <div className="config-section-title">🎫 상품상세 쿠폰</div>
+                <p className="config-section-desc">
+                  상품 상세페이지에서 쿠폰을 다운로드할 버튼의 텍스트나 CSS 셀렉터를 입력합니다.
+                  비워두면 상품상세 쿠폰 다운로드를 건너뜁니다.
+                </p>
+                <input
+                  className="form-control"
+                  placeholder="오늘의 혜택받기 또는 .benefit-btn"
+                  value={orderConfig.detail_coupon_selector}
+                  onChange={e => setOrderConfig(c => ({...c, detail_coupon_selector: e.target.value}))}
+                  style={{marginTop:4,fontSize:12}}
+                />
+              </div>
+
+              {/* ── 페이지 URL ── */}
+              <div className="product-config-section active" style={{marginTop:12}}>
+                <div className="config-section-title">페이지 URL</div>
+                <div style={{display:'flex',flexDirection:'column',gap:8,marginTop:8}}>
+                  <label style={{fontSize:12}}>
+                    <span style={{color:'var(--text-secondary)'}}>로그인 URL</span>
+                    <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>(비워두면 사이트 URL 사용)</span>
+                    <input
+                      className="form-control"
+                      placeholder="https://kor.lottedfs.com/kr/login"
+                      value={orderConfig.login_url}
+                      onChange={e => setOrderConfig(c => ({...c, login_url: e.target.value}))}
+                      style={{marginTop:4,fontSize:12}}
+                    />
+                  </label>
+                  <label style={{fontSize:12}}>
+                    <span style={{color:'var(--text-secondary)'}}>상품상세 URL</span>
+                    <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>{'(상품코드 위치에 {prdNo} 사용)'}</span>
+                    <input
+                      className="form-control"
+                      placeholder="https://kor.lottedfs.com/kr/product/productDetail?prdNo={prdNo}&adltPrdYn=Y&onOff=on"
+                      value={orderConfig.product_detail_url_template}
+                      onChange={e => setOrderConfig(c => ({...c, product_detail_url_template: e.target.value}))}
+                      style={{marginTop:4,fontSize:12}}
+                    />
+                  </label>
+                  <div style={{fontSize:12}}>
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
+                      <div>
+                        <span style={{color:'var(--text-secondary)'}}>상품코드</span>
+                        <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>
+                          (엔터로 구분, 최대 {MAX_PRODUCT_CODES.toLocaleString()}건)
+                        </span>
+                      </div>
+                      <span style={{
+                        fontSize:11,
+                        color: orderOverLimit ? 'var(--danger, #d33)' : 'var(--text-secondary)',
+                        fontWeight: orderOverLimit ? 600 : 400,
+                      }}>
+                        등록 {orderParsedCodes.length.toLocaleString()}건
+                        {orderDupCount > 0 && ` (중복 ${orderDupCount}건 제외)`}
+                        {orderOverLimit && ` · 최대 ${MAX_PRODUCT_CODES.toLocaleString()}건 초과`}
+                      </span>
+                    </div>
+                    <textarea
+                      className="form-control"
+                      placeholder={'20000996458\n20000996459\n...'}
+                      value={orderCodesText}
+                      onChange={e => setOrderCodesText(e.target.value)}
+                      rows={8}
+                      spellCheck={false}
+                      style={{
+                        marginTop:4,fontSize:12,fontFamily:'monospace',
+                        resize:'vertical',minHeight:120,
+                      }}
+                    />
+                  </div>
+                  <label style={{fontSize:12}}>
+                    <span style={{color:'var(--text-secondary)'}}>주문서 URL</span>
+                    <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>(구매 클릭 후 도달 URL 패턴)</span>
+                    <input
+                      className="form-control"
+                      placeholder="https://kor.lps.lottedfs.com/kr/newOrder"
+                      value={orderConfig.order_url}
+                      onChange={e => setOrderConfig(c => ({...c, order_url: e.target.value}))}
+                      style={{marginTop:4,fontSize:12}}
+                    />
+                  </label>
+                  <label style={{fontSize:12}}>
+                    <span style={{color:'var(--text-secondary)'}}>LPS 로그인 URL</span>
+                    <span style={{fontSize:11,color:'var(--text-secondary)',marginLeft:4}}>(서브도메인 로그인, 비워두면 자동감지)</span>
+                    <input
+                      className="form-control"
+                      placeholder="https://kor.lps.lottedfs.com/kr/member/login"
+                      value={orderConfig.lps_login_url}
+                      onChange={e => setOrderConfig(c => ({...c, lps_login_url: e.target.value}))}
+                      style={{marginTop:4,fontSize:12}}
+                    />
+                  </label>
+                </div>
+              </div>
+
+              {/* ── 주문서 쿠폰 다운로드 ── */}
+              <div className="product-config-section active" style={{marginTop:12}}>
+                <div className="config-section-title">🏷️ 주문서 쿠폰 다운로드</div>
+                <p className="config-section-desc">
+                  주문서 페이지에서 쿠폰을 다운로드할 버튼의 텍스트나 CSS 셀렉터를 입력합니다.
+                  비워두면 쿠폰 다운로드를 건너뜁니다. (#, . 으로 시작하면 CSS 셀렉터, 그 외에는 텍스트 매칭)
+                </p>
+                <input
+                  className="form-control"
+                  placeholder="쿠폰 다운로드 또는 .coupon-download-btn"
+                  value={orderConfig.order_coupon_selector}
+                  onChange={e => setOrderConfig(c => ({...c, order_coupon_selector: e.target.value}))}
+                  style={{marginTop:4,fontSize:12}}
+                />
+              </div>
+
+              {/* ── 수집 항목 ── */}
+              <div className="product-config-section active" style={{marginTop:12}}>
+                <div className="config-section-title" style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                  <span>수집 항목 ({orderConfig.collect_fields.length}/{collectFieldDefs.length})</span>
+                  <div style={{display:'flex',gap:6}}>
+                    <button type="button" className="btn btn-sm"
+                      style={{fontSize:11,padding:'2px 8px'}}
+                      onClick={() => setOrderConfig(c => ({...c, collect_fields: [...allFieldKeys]}))}
+                    >전체선택</button>
+                    <button type="button" className="btn btn-sm"
+                      style={{fontSize:11,padding:'2px 8px'}}
+                      onClick={() => setOrderConfig(c => ({...c, collect_fields: []}))}
+                    >전체해제</button>
+                  </div>
+                </div>
+                <div className="field-checkbox-grid" style={{marginTop:8}}>
+                  {collectFieldDefs.map(f => {
+                    const isChecked = orderConfig.collect_fields.includes(f.key)
+                    return (
+                      <label key={f.key}
+                        className={`field-checkbox ${isChecked ? 'checked' : ''}`}
+                        title={f.group}
+                      >
+                        <input type="checkbox" checked={isChecked}
+                          onChange={() => setOrderConfig(c => ({
+                            ...c,
+                            collect_fields: isChecked
+                              ? c.collect_fields.filter(k => k !== f.key)
+                              : [...c.collect_fields, f.key],
+                          }))}
+                        />
+                        <span>{f.label}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* ── 로그인 폼 셀렉터 ── */}
+              <div className="product-config-section active" style={{marginTop:12}}>
+                <div className="config-section-title">로그인 폼 셀렉터 (선택)</div>
+                <p className="config-section-desc">비워두면 자동 탐지합니다. 로그인 실패 시 수동 지정하세요.</p>
+                <div className="order-selector-grid">
+                  <label>
+                    <span>ID 입력 셀렉터</span>
+                    <input className="form-control" placeholder="#userId"
+                      value={orderConfig.login_config.id_selector || ''}
+                      onChange={e => setOrderConfig(c => ({...c, login_config: {...c.login_config, id_selector: e.target.value}}))}
+                    />
+                  </label>
+                  <label>
+                    <span>비밀번호 셀렉터</span>
+                    <input className="form-control" placeholder="#password"
+                      value={orderConfig.login_config.pwd_selector || ''}
+                      onChange={e => setOrderConfig(c => ({...c, login_config: {...c.login_config, pwd_selector: e.target.value}}))}
+                    />
+                  </label>
+                  <label>
+                    <span>로그인 버튼 셀렉터</span>
+                    <input className="form-control" placeholder="#loginBtn"
+                      value={orderConfig.login_config.submit_selector || ''}
+                      onChange={e => setOrderConfig(c => ({...c, login_config: {...c.login_config, submit_selector: e.target.value}}))}
+                    />
+                  </label>
+                  <label>
+                    <span>로그인 성공 지표</span>
+                    <input className="form-control" placeholder=".my-page, .logout"
+                      value={orderConfig.login_config.success_indicator || ''}
+                      onChange={e => setOrderConfig(c => ({...c, login_config: {...c.login_config, success_indicator: e.target.value}}))}
+                    />
+                  </label>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* ── 수집 항목 선택 (에이전트별 동적 표시) ── */}
-          {spec && (
+          {spec && form.agent_type !== 'order' && (
             <div className="add-site-collect-section" style={{background: spec.color, borderRadius:8, padding:16, marginTop:8}}>
               <div style={{fontWeight:600,fontSize:14,color:spec.textColor,marginBottom:4}}>{spec.label}</div>
               <div style={{fontSize:12,color:spec.textColor,opacity:0.8,marginBottom:12}}>{spec.desc}</div>
@@ -3020,7 +4167,6 @@ function AddSiteModal({ categories, onClose, onSaved, showConfirm, closeConfirm 
                 {spec.fields.map(f => (
                   <label key={f.key}
                     className={`field-checkbox ${checked.fields[f.key] ? 'checked' : ''}`}
-                    title={f.group === 'basic' ? '기본 필드' : '추가 필드'}
                   >
                     <input
                       type="checkbox"
@@ -3028,7 +4174,6 @@ function AddSiteModal({ categories, onClose, onSaved, showConfirm, closeConfirm 
                       onChange={() => toggleField(f.key)}
                     />
                     <span>{f.label}</span>
-                    {f.group === 'basic' && <span className="field-badge-basic">기본</span>}
                   </label>
                 ))}
               </div>

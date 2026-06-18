@@ -33,6 +33,7 @@ from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 from core.base_agent import BaseAgent, DEFAULT_SETTINGS
+from core.failure_collector import FailureCollector
 from core.ocr import OCRManager
 
 
@@ -381,13 +382,14 @@ class CafeAgent(BaseAgent):
         """카페 인기글에서 게시글과 상품 정보를 수집한다."""
         site = self.db.get_site(site_id)
         if not site:
-            print(f"[cafe] 사이트 ID={site_id} 를 찾을 수 없습니다")
+            self._log(f"사이트 ID={site_id} 를 찾을 수 없습니다")
             return
 
         result_id = self.db.create_result(site_id)
         start_time = time.time()
         raw_cfg = self.get_crawl_config(site)
         crawl_cfg = self._normalize_config(raw_cfg)
+        self._failure_collector = FailureCollector(site_id, result_id, self.agent_type)
 
         try:
             cookie_domain = self._get_cookie_domain(site["site_url"])
@@ -413,16 +415,16 @@ class CafeAgent(BaseAgent):
 
             self._save_json(site, posts)
 
-            print(f"\n[cafe] 수집 완료: {site['site_name']}")
-            print(f"  게시글 수: {len(posts)}")
+            self._log(f"수집 완료: {site['site_name']}")
+            self._log(f"  게시글 수: {len(posts)}")
             body_count = sum(1 for p in posts if p.get("body"))
-            print(f"  본문 수집: {body_count}개")
+            self._log(f"  본문 수집: {body_count}개")
             product_count = sum(
                 1 for p in posts
                 if p.get("prices") or p.get("product_links")
             )
-            print(f"  상품 정보 포함: {product_count}개")
-            print(f"  소요 시간: {elapsed:.1f}초")
+            self._log(f"  상품 정보 포함: {product_count}개")
+            self._log(f"  소요 시간: {elapsed:.1f}초")
 
         except Exception as e:
             elapsed = time.time() - start_time
@@ -432,9 +434,12 @@ class CafeAgent(BaseAgent):
                 error_msg=str(e),
                 elapsed_sec=elapsed,
             )
-            print(f"[cafe] 수집 실패: {e}")
+            self._record_failure("exception", f"수집 실패: {e}")
+            self._log(f"수집 실패: {e}")
 
         finally:
+            if self._failure_collector:
+                self._failure_collector.save(self.db)
             self.browser_mgr.close()
             self.page = None
 
@@ -461,7 +466,7 @@ class CafeAgent(BaseAgent):
           - 다음 페이지 버튼이 없음 (마지막 그룹)
           - max_pages 도달 (안전 장치)
         """
-        print("\n[cafe] ── 인기글 목록 수집 (전체 페이지) ──")
+        self._log("── 인기글 목록 수집 (전체 페이지) ──")
 
         # 날짜 범위 결정
         # 우선순위: date_from/date_to 직접 지정 > date_range_days 자동 계산
@@ -482,11 +487,11 @@ class CafeAgent(BaseAgent):
         )
 
         if date_from:
-            print(f"[cafe] 수집 시작일: {date_from.strftime('%Y-%m-%d')}")
+            self._log(f"수집 시작일: {date_from.strftime('%Y-%m-%d')}")
         if date_to:
-            print(f"[cafe] 수집 종료일: {date_to.strftime('%Y-%m-%d')}")
+            self._log(f"수집 종료일: {date_to.strftime('%Y-%m-%d')}")
         if not date_from and not date_to:
-            print("[cafe] 날짜 필터 없음 → 전체 수집")
+            self._log("날짜 필터 없음 → 전체 수집")
 
         # cafe_id 추출
         cafe_id = self._extract_cafe_id(site["site_url"])
@@ -494,13 +499,13 @@ class CafeAgent(BaseAgent):
             raise RuntimeError(
                 f"카페 ID를 추출할 수 없습니다: {site['site_url']}"
             )
-        print(f"[cafe] 카페 ID: {cafe_id}")
+        self._log(f"카페 ID: {cafe_id}")
 
         # 1페이지 접속 (iframe URL 직접 접근)
         popular_url = _CAFE_POPULAR_IFRAME_URL.replace(
             "{cafe_id}", cafe_id,
         )
-        print(f"[cafe] 인기글 URL: {popular_url}")
+        self._log(f"인기글 URL: {popular_url}")
 
         resp = self._safe_goto(
             popular_url, wait_until="domcontentloaded",
@@ -518,7 +523,7 @@ class CafeAgent(BaseAgent):
         page_num = 1
 
         while page_num <= max_pages:
-            print(f"\n[cafe] ── 페이지 {page_num} ──")
+            self._log(f"── 페이지 {page_num} ──")
 
             # 게시글 목록 추출
             try:
@@ -526,12 +531,12 @@ class CafeAgent(BaseAgent):
                     _JS_POPULAR_LIST_EXTRACT,
                 )
             except Exception as e:
-                print(f"[cafe] 페이지 {page_num} 추출 실패: {e}")
+                self._log(f"페이지 {page_num} 추출 실패: {e}")
                 break
 
             # 빈 페이지 → 종료
             if not raw_posts:
-                print(f"[cafe] 페이지 {page_num}: 게시글 없음 → 종료")
+                self._log(f"페이지 {page_num}: 게시글 없음 → 종료")
                 break
 
             # 중복 제거 + 날짜 필터
@@ -560,8 +565,8 @@ class CafeAgent(BaseAgent):
                 all_posts.append(post)
                 page_added += 1
 
-            print(
-                f"[cafe] 페이지 {page_num}: "
+            self._log(
+                f"페이지 {page_num}: "
                 f"{len(raw_posts)}개 발견, {page_added}개 추가"
                 f" (누적 {len(all_posts)}개)"
             )
@@ -571,17 +576,17 @@ class CafeAgent(BaseAgent):
             for p in all_posts[preview_start:preview_start + 3]:
                 safe_title = _safe_print(p["title"][:50])
                 safe_date = _safe_print(p.get("date", ""))
-                print(
+                self._log(
                     f"  [{p['display_order']}] "
                     f"{safe_title} ({safe_date})"
                 )
             if page_added > 3:
-                print(f"  ... 외 {page_added - 3}개")
+                self._log(f"  ... 외 {page_added - 3}개")
 
             # 조기 종료 1: 새 게시글 없음 (중복 페이지)
             if page_added == 0 and page_before_range == 0:
-                print(
-                    f"[cafe] 페이지 {page_num}: "
+                self._log(
+                    f"페이지 {page_num}: "
                     f"새 게시글 없음 → 종료"
                 )
                 break
@@ -589,8 +594,8 @@ class CafeAgent(BaseAgent):
             # 조기 종료 2: 전체가 date_from 이전
             if (date_from and page_before_range > 0
                     and page_added == 0):
-                print(
-                    f"[cafe] 페이지 {page_num} 전체가 "
+                self._log(
+                    f"페이지 {page_num} 전체가 "
                     f"수집 시작일 이전 → 종료"
                 )
                 break
@@ -599,8 +604,8 @@ class CafeAgent(BaseAgent):
             next_page = page_num + 1
             clicked = self._click_page_button(next_page)
             if not clicked:
-                print(
-                    f"[cafe] 페이지 {next_page} 버튼 없음 → "
+                self._log(
+                    f"페이지 {next_page} 버튼 없음 → "
                     f"마지막 페이지"
                 )
                 break
@@ -613,8 +618,8 @@ class CafeAgent(BaseAgent):
 
             page_num = next_page
 
-        print(
-            f"\n[cafe] 목록 수집 완료: 총 {len(all_posts)}개 "
+        self._log(
+            f"목록 수집 완료: 총 {len(all_posts)}개 "
             f"({page_num}페이지 탐색)"
         )
         return all_posts
@@ -696,7 +701,7 @@ class CafeAgent(BaseAgent):
         self, site: dict, posts: list[dict], crawl_cfg: dict,
     ) -> list[dict]:
         """각 게시글 상세 페이지에서 본문과 상품 정보를 추출한다."""
-        print(f"\n[cafe] ── 게시글 상세 수집 ({len(posts)}개) ──")
+        self._log(f"── 게시글 상세 수집 ({len(posts)}개) ──")
 
         max_body_len = DEFAULT_CAFE_SETTINGS["max_body_length"]
         collect_links = crawl_cfg.get("collect_links", True)
@@ -710,7 +715,7 @@ class CafeAgent(BaseAgent):
             try:
                 ocr_client = OCRManager()
             except ValueError as e:
-                print(f"[cafe] OCR 비활성화: {e}")
+                self._log(f"OCR 비활성화: {e}")
 
         for i, post in enumerate(posts, 1):
             url = post.get("url", "")
@@ -718,12 +723,12 @@ class CafeAgent(BaseAgent):
                 continue
 
             safe_title = _safe_print(post.get("title", "N/A")[:40])
-            print(f"[cafe] [{i}/{len(posts)}] {safe_title}...")
+            self._log(f"[{i}/{len(posts)}] {safe_title}...")
 
             try:
                 resp = self._safe_goto(url, wait_until="domcontentloaded")
                 if self._is_blocked(resp):
-                    print("[cafe]   차단됨 → 스킵")
+                    self._log("  차단됨 → 스킵")
                     continue
 
                 self._human_dwell()
@@ -731,7 +736,7 @@ class CafeAgent(BaseAgent):
                 # 본문 + 상품 정보 추출
                 detail = self.page.evaluate(_JS_CAFE_ARTICLE_EXTRACT)
                 if not detail:
-                    print("[cafe]   본문 추출 실패")
+                    self._log("  본문 추출 실패")
                     continue
 
                 # 본문 텍스트
@@ -800,13 +805,13 @@ class CafeAgent(BaseAgent):
                         post["prices"] = existing
 
             except Exception as e:
-                print(f"[cafe]   오류: {e}")
+                self._log(f"  오류: {e}")
 
             if i < len(posts):
                 self._delay()
 
         body_count = sum(1 for p in posts if p.get("body"))
-        print(f"[cafe] 상세 수집 완료: {body_count}/{len(posts)}개 성공")
+        self._log(f"상세 수집 완료: {body_count}/{len(posts)}개 성공")
         return posts
 
     def _extract_prices_from_images(
@@ -874,8 +879,8 @@ class CafeAgent(BaseAgent):
                     p["source"] = "ocr"
                     p["ocr_engine"] = engine
                 all_ocr_prices.extend(prices)
-                print(
-                    f"[cafe]   OCR({engine}): "
+                self._log(
+                    f"  OCR({engine}): "
                     f"{len(prices)}개 가격 추출"
                 )
 
@@ -974,7 +979,7 @@ class CafeAgent(BaseAgent):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
-        print(f"[cafe] 파일 저장: {output_dir}")
+        self._log(f"파일 저장: {output_dir}")
 
 
 # ─── 유틸 ────────────────────────────────────────────────────────

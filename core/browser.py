@@ -10,6 +10,8 @@ Playwright Stealth 브라우저 관리 모듈
 """
 import json
 import os
+import sys
+from datetime import datetime
 from urllib.parse import urlparse
 
 from playwright.sync_api import (
@@ -67,6 +69,17 @@ class BrowserManager:
         self._cookie_domain: str | None = None
         self._current_proxy: dict | None = None
 
+    @staticmethod
+    def _log(msg: str):
+        """날짜/시간 포함 로그 출력."""
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        line = f"[{ts}] [browser] {msg}"
+        try:
+            print(line)
+        except UnicodeEncodeError:
+            sys.stdout.buffer.write((line + "\n").encode("utf-8", errors="replace"))
+            sys.stdout.buffer.flush()
+
     def create(
         self,
         config: dict | None = None,
@@ -107,7 +120,7 @@ class BrowserManager:
 
         mode = "Headless" if headless else "Headed"
         proxy_info = f" via {proxy['server']}" if proxy else ""
-        print(f"[browser] Stealth Chromium 브라우저 시작 ({mode}{proxy_info})...")
+        self._log(f"Stealth Chromium 브라우저 시작 ({mode}{proxy_info})...")
 
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(
@@ -156,7 +169,7 @@ class BrowserManager:
         page = self._context.new_page()
         _stealth.apply_stealth_sync(page)
 
-        print("[browser] 브라우저 준비 완료")
+        self._log("브라우저 준비 완료")
         return page
 
     def recreate_context(self, proxy: dict | None = None) -> Page:
@@ -173,7 +186,7 @@ class BrowserManager:
 
         self._current_proxy = proxy
         proxy_info = f" via {proxy['server']}" if proxy else " (직접 연결)"
-        print(f"[browser] 프록시 교체{proxy_info}")
+        self._log(f"프록시 교체{proxy_info}")
 
         context_kwargs = dict(
             user_agent=self._config["user_agent"],
@@ -208,7 +221,7 @@ class BrowserManager:
 
         page = self._context.new_page()
         _stealth.apply_stealth_sync(page)
-        print("[browser] 새 컨텍스트 준비 완료")
+        self._log("새 컨텍스트 준비 완료")
         return page
 
     def save_cookies(self, domain: str | None = None):
@@ -228,9 +241,9 @@ class BrowserManager:
             with open(cookie_path, "w", encoding="utf-8") as f:
                 json.dump(cookies, f, ensure_ascii=False, indent=2)
 
-            print(f"[browser] 쿠키 저장 ({len(cookies)}개): {domain}")
+            self._log(f"쿠키 저장 ({len(cookies)}개): {domain}")
         except Exception as e:
-            print(f"[browser] 쿠키 저장 실패: {e}")
+            self._log(f"쿠키 저장 실패: {e}")
 
     def _load_cookies(self, domain: str):
         """저장된 쿠키 파일을 브라우저 컨텍스트에 로드한다."""
@@ -244,9 +257,9 @@ class BrowserManager:
 
             if cookies and self._context:
                 self._context.add_cookies(cookies)
-                print(f"[browser] 쿠키 로드 ({len(cookies)}개): {domain}")
+                self._log(f"쿠키 로드 ({len(cookies)}개): {domain}")
         except Exception as e:
-            print(f"[browser] 쿠키 로드 실패: {e}")
+            self._log(f"쿠키 로드 실패: {e}")
 
     def close(self):
         """브라우저 세션을 완전히 종료한다. 쿠키를 자동 저장."""
@@ -267,7 +280,7 @@ class BrowserManager:
             self._context = None
             self._browser = None
             self._playwright = None
-        print("[browser] 브라우저 종료")
+        self._log("브라우저 종료")
 
 
 # ─── 유틸 ────────────────────────────────────────────────────────

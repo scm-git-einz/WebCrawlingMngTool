@@ -64,10 +64,9 @@ def main():
     )
 
     time.sleep(3)
-    url = "http://localhost:5173"
+    url = "http://10.149.67.179:5173"
     print(f"\n[web] 브라우저에서 접속하세요: {url}")
     print("[web] 종료하려면 Ctrl+C를 누르세요.\n")
-    webbrowser.open(url)
 
     try:
         backend.wait()

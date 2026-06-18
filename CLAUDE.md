@@ -25,7 +25,7 @@
 
 | 규칙 | 이유 |
 |------|------|
-| **LLM/AI API 호출 금지** | ANTHROPIC_API_KEY 없음. 모든 분석/추출은 규칙 기반(RuleAnalyzer) |
+| **LLM API 사용 허용 (비용 추적 필수)** | LLM 호출 시 반드시 `core/llm_client.py` 통해 호출하고, 토큰 사용량/비용을 DB에 기록. 규칙 기반으로 충분한 처리는 LLM 남용 금지 |
 | **사이트별 하드코딩 금지** | 크롤링 대상은 동적으로 변경됨. 플랫폼 감지 + 템플릿으로 동적 대응 |
 | **UI-Agent 분리 유지** | UI는 사용자 친화적 필드, Agent는 내부 필드. `_normalize_config()`으로 변환 |
 | **모든 작업 내역 .md 기록** | 작업 완료 후 반드시 `web/PROGRESS.md`에 Phase N으로 추가 |
@@ -48,7 +48,7 @@
 |------|------|------|
 | Backend | FastAPI + uvicorn | port 8000 |
 | Frontend | React 18 + Vite | port 5173, proxy → 8000 |
-| DB | SQLite (`data/crawling.db`) | `core.db.CrawlDB` 클래스 |
+| DB | PostgreSQL (`aops@localhost:5432`) | `core.db.CrawlDB` 클래스, psycopg2 |
 | 브라우저 | Playwright + playwright_stealth | Stealth Chromium |
 | 차트 | recharts | OCR 통계 시각화 |
 | 스타일 | CSS Variables (`App.css`) | 외부 CSS 프레임워크 사용 금지 |
@@ -71,7 +71,7 @@ D:\crawling\
 ├── core/                       # 공통 인프라
 │   ├── base_agent.py           # BaseAgent 추상 클래스
 │   ├── browser.py              # BrowserManager (Stealth)
-│   ├── db.py                   # CrawlDB (SQLite)
+│   ├── db.py                   # CrawlDB (PostgreSQL)
 │   ├── network_interceptor.py  # 네트워크 요청 캡처
 │   ├── rule_analyzer.py        # 규칙 기반 사이트 분석
 │   ├── ocr.py                  # OCR 이중화 (Document Parse + Tesseract)
@@ -258,7 +258,7 @@ const agentTypeFromCategory = (cat) => {
 |------|------|
 | 접두사 | 모든 API는 `/api/` 접두사 |
 | 라우트 순서 | batch/고정 경로를 parameterized 경로 앞에 배치 |
-| DB 관리 | 매 요청마다 `_db()` 생성 → try/finally로 `db.close()` |
+| DB 관리 | 매 요청마다 `_db()` 생성 → try/finally로 `db.close()`, 커서는 `db._cur()` 사용 |
 | 크롤링 실행 | `subprocess.Popen`으로 별도 프로세스, `PYTHONIOENCODING=utf-8` 필수 |
 | CLI 명령어 | `python main.py run --id {N}` (NOT `--site-id`) |
 

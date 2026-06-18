@@ -37,7 +37,7 @@ def ocr_sites():
     """OCR 이력이 있는 사이트 목록"""
     db = _db()
     try:
-        cur = db.conn.cursor()
+        cur = db._cur()
         cur.execute("""
             SELECT DISTINCT o.site_id, s.site_name
             FROM ocr_usage_log o

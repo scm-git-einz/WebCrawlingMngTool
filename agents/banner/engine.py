@@ -1,5 +1,5 @@
 """
-배너/비주얼 수집 에이전트 (v2)
+배너/비주얼 수집 에이전트 (v2.1)
 
 경쟁사 메인 페이지의 배너(히어로, 서브, 팝업) 영역에서
 이미지·텍스트·링크를 수집한다.
@@ -7,10 +7,15 @@
 수집 파이프라인:
   1. config 로드 + 정규화
   2. 브라우저 시작 + 페이지 접속
-  3. 배너 영역 탐지 (슬라이더/히어로/대형 이미지)
+  3. 배너 영역 탐지 (슬라이더/히어로/대형 이미지) — 중복 제거 + 상한 적용
   4. 배너 데이터 수집 (슬라이드 순회 포함)
   5. (선택) 스크린샷 캡처
   6. 저장 (DB + JSON + 이미지)
+
+v2.1 변경:
+  - _log() 모듈 함수 → self._log() BaseAgent 로그 시스템으로 통일
+  - JS 탐지: 부모-자식 중복 제거, 면적 기반 정렬, 상한 MAX_DETECTED_AREAS
+  - 슬라이더 순회: 영역별 진행 로그, 타임아웃 보호
 """
 import json
 import os
@@ -18,9 +23,11 @@ import time
 from datetime import datetime
 
 from core.base_agent import BaseAgent, DEFAULT_SETTINGS
+from core.failure_collector import FailureCollector
 
 
-_TAG = "[banner]"
+# 탐지 배너 영역 최대 개수 (노이즈 방지)
+MAX_DETECTED_AREAS = 20
 
 
 class BannerAgent(BaseAgent):
@@ -68,16 +75,17 @@ class BannerAgent(BaseAgent):
     def run_site(self, site_id: int):
         site = self.db.get_site(site_id)
         if not site:
-            _log(f"사이트 ID={site_id} 를 찾을 수 없습니다")
+            self._log(f"사이트 ID={site_id} 를 찾을 수 없습니다")
             return
 
         result_id = self.db.create_result(site_id)
         t0 = time.time()
         cfg = self._normalize_config(self.get_crawl_config(site))
         url = site["site_url"]
+        self._failure_collector = FailureCollector(site_id, result_id, self.agent_type)
 
-        _log(f"배너 수집 시작: {site['site_name']}  "
-             f"areas={cfg['banner_areas']}")
+        self._log(f"배너 수집 시작: {site['site_name']}  "
+                  f"areas={cfg['banner_areas']}")
 
         try:
             cookie_domain = self._get_cookie_domain(url)
@@ -85,7 +93,7 @@ class BannerAgent(BaseAgent):
 
             resp = self._safe_goto(url)
             if self._is_blocked(resp):
-                raise RuntimeError(f"차단됨 (HTTP {resp.status})")
+                raise RuntimeError(f"차단됨 (HTTP {resp.status}, proxy={self._proxy_ip})")
 
             self.page.wait_for_timeout(DEFAULT_SETTINGS["initial_wait_ms"])
             self._human_dwell()
@@ -113,7 +121,7 @@ class BannerAgent(BaseAgent):
                 elapsed_sec=elapsed,
             )
             self._save_json(site, banners)
-            _log(f"배너 수집 완료: {len(banners)}개, {elapsed:.1f}초")
+            self._log(f"배너 수집 완료: {len(banners)}개, {elapsed:.1f}초")
 
         except Exception as e:
             elapsed = time.time() - t0
@@ -121,9 +129,12 @@ class BannerAgent(BaseAgent):
                 result_id, status="failed",
                 error_msg=str(e), elapsed_sec=elapsed,
             )
-            _log(f"배너 수집 실패: {e}")
+            self._record_failure("exception", f"배너 수집 실패: {e}")
+            self._log(f"배너 수집 실패: {e}")
 
         finally:
+            if self._failure_collector:
+                self._failure_collector.save(self.db)
             self.browser_mgr.close()
             self.page = None
 
@@ -162,25 +173,47 @@ class BannerAgent(BaseAgent):
         include_text = cfg.get("include_text", True)
         all_banners = []
 
-        # 1단계: 배너 영역 탐지
+        # 1단계: 배너 영역 탐지 (JS에서 중복 제거 + 상한 적용)
         detected = self.page.evaluate(_JS_DETECT_BANNER_AREAS)
         if not detected:
-            _log("배너 영역 탐지 실패")
+            self._log("배너 영역 탐지 실패")
             return []
 
-        _log(f"탐지된 배너 영역: {len(detected)}개")
+        self._log(f"탐지된 배너 영역: {len(detected)}개")
 
+        # 타입별 개수 요약 로그
+        type_counts = {}
         for area in detected:
-            area_type = area.get("type", "unknown")
-            if area_type not in target_areas and "all" not in target_areas:
-                continue
+            t = area.get("type", "unknown")
+            type_counts[t] = type_counts.get(t, 0) + 1
+        self._log(f"  유형별: {type_counts}")
 
+        # 대상 필터링
+        filtered = [
+            a for a in detected
+            if a.get("type", "unknown") in target_areas or "all" in target_areas
+        ]
+        self._log(f"  대상 영역: {len(filtered)}개 (target={target_areas})")
+
+        if not filtered:
+            self._log("대상 배너 영역이 없습니다. 설정의 banner_areas를 확인하세요.")
+            return []
+
+        for idx, area in enumerate(filtered):
+            area_type = area.get("type", "unknown")
             is_slider = area.get("is_slider", False)
+            area_sel = area.get("selector", "")[:60]
+
+            self._log(f"  [{idx+1}/{len(filtered)}] {area_type}"
+                      f" {'(slider)' if is_slider else '(static)'}"
+                      f" {area.get('width', 0)}x{area.get('height', 0)}"
+                      f" sel={area_sel}")
 
             if is_slider:
                 slides = self._collect_slider_banners(
                     area, max_slides, include_text
                 )
+                self._log(f"    → 슬라이드 {len(slides)}개 수집")
                 all_banners.extend(slides)
             else:
                 banner = {
@@ -196,7 +229,7 @@ class BannerAgent(BaseAgent):
                     banner["text"] = area.get("text", "")
                 all_banners.append(banner)
 
-        _log(f"총 배너 {len(all_banners)}개 수집")
+        self._log(f"총 배너 {len(all_banners)}개 수집")
         return all_banners
 
     def _collect_slider_banners(self, area: dict, max_slides: int,
@@ -298,11 +331,11 @@ class BannerAgent(BaseAgent):
                 ss_dir, f"banner_full_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
             )
             self.page.screenshot(path=path, full_page=False)
-            _log(f"스크린샷 저장: {path}")
+            self._log(f"스크린샷 저장: {path}")
             for b in banners:
                 b["screenshot_path"] = path
         except Exception as e:
-            _log(f"스크린샷 실패: {e}")
+            self._log(f"스크린샷 실패: {e}")
 
     def _download_banner_images(self, site: dict, banners: list):
         """배너 이미지를 파일로 다운로드한다."""
@@ -323,9 +356,9 @@ class BannerAgent(BaseAgent):
                     with open(path, "wb") as f:
                         f.write(resp.body())
                     banner["local_image_path"] = path
-                    _log(f"이미지 다운로드: banner_{i+1}{ext}")
+                    self._log(f"이미지 다운로드: banner_{i+1}{ext}")
             except Exception as e:
-                _log(f"이미지 다운로드 실패 [{i+1}]: {e}")
+                self._log(f"이미지 다운로드 실패 [{i+1}]: {e}")
 
     # ══════════════════════════════════════════════════════════════
     # 결과 저장
@@ -341,7 +374,7 @@ class BannerAgent(BaseAgent):
                 "site_url": site["site_url"],
                 "crawl_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "agent_type": "banner",
-                "agent_version": "v2",
+                "agent_version": "v2.1",
             },
             "banners": banners,
             "total_banners": len(banners),
@@ -354,7 +387,7 @@ class BannerAgent(BaseAgent):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
-        _log(f"파일 저장: {output_dir}")
+        self._log(f"파일 저장: {output_dir}")
 
     @staticmethod
     def _get_output_dir(site: dict) -> str:
@@ -366,19 +399,56 @@ class BannerAgent(BaseAgent):
 
 
 # ══════════════════════════════════════════════════════════════════
-# JS: 배너 영역 탐지
+# JS: 배너 영역 탐지 (v2.1 — 부모-자식 중복 제거 + 상한)
 # ══════════════════════════════════════════════════════════════════
 
 _JS_DETECT_BANNER_AREAS = """(() => {
+    var MAX_AREAS = """ + str(MAX_DETECTED_AREAS) + """;
     var results = [];
     var vpW = window.innerWidth;
+    var seenEls = new Set();  /* 이미 등록된 DOM 요소 (부모-자식 중복 방지) */
+
+    function addArea(el, type, isSlider, selector) {
+        /* 이미 등록된 요소이거나, 등록된 요소의 자식이면 스킵 */
+        var node = el;
+        while (node) {
+            if (seenEls.has(node)) return;
+            node = node.parentElement;
+        }
+        /* 이 요소의 자식 중 이미 등록된 것이 있으면 그것을 제거 (더 큰 컨테이너 우선) */
+        results = results.filter(function(r) {
+            return !el.contains(r._el);
+        });
+
+        var img = el.querySelector('img[src]');
+        var link = el.querySelector('a[href]');
+        var text = '';
+        var tEl = el.querySelector('h1,h2,h3,[class*="title"],[class*="text"]');
+        if (tEl) text = tEl.textContent.trim().substring(0, 200);
+
+        var rect = el.getBoundingClientRect();
+        seenEls.add(el);
+
+        results.push({
+            _el: el,  /* 내부 참조용, 반환 시 제거 */
+            type: type,
+            is_slider: isSlider,
+            selector: selector,
+            image_url: img ? img.src : '',
+            link_url: link ? link.href : '',
+            text: text,
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+            top: Math.round(rect.top),
+            area: Math.round(rect.width * rect.height)
+        });
+    }
 
     /* 슬라이더 프레임워크 탐지 */
     var sliderSelectors = [
-        '.swiper-container', '.swiper', '[class*="swiper"]',
-        '.slick-slider', '[class*="slick"]',
+        '.swiper-container', '.swiper',
+        '.slick-slider',
         '[class*="carousel"]', '[class*="Carousel"]',
-        '[class*="slider"]', '[class*="Slider"]',
         '[class*="banner_slide"]', '[class*="bnr_slide"]',
         '[class*="main_visual"]', '[class*="mainVisual"]',
         '[class*="hero_slide"]', '[class*="heroSlide"]',
@@ -391,22 +461,9 @@ _JS_DETECT_BANNER_AREAS = """(() => {
                 var el = els[ei];
                 var rect = el.getBoundingClientRect();
                 if (rect.width < vpW * 0.5 || rect.height < 100) continue;
-                if (rect.top > window.innerHeight * 1.5) continue;
-
-                var areaType = rect.top < 300 ? 'hero' : 'sub_banner';
-                var img = el.querySelector('img[src]');
-                var link = el.querySelector('a[href]');
-
-                results.push({
-                    type: areaType,
-                    is_slider: true,
-                    selector: sliderSelectors[si],
-                    image_url: img ? img.src : '',
-                    link_url: link ? link.href : '',
-                    text: '',
-                    width: Math.round(rect.width),
-                    height: Math.round(rect.height)
-                });
+                if (rect.top > window.innerHeight * 2) continue;
+                var areaType = rect.top < 400 ? 'hero' : 'sub_banner';
+                addArea(el, areaType, true, sliderSelectors[si]);
             }
         } catch(e) {}
     }
@@ -427,29 +484,7 @@ _JS_DETECT_BANNER_AREAS = """(() => {
                 var hel = hels[hei];
                 var hr = hel.getBoundingClientRect();
                 if (hr.width < vpW * 0.5 || hr.height < 100) continue;
-
-                var already = results.some(function(r) {
-                    return Math.abs(r.width - Math.round(hr.width)) < 50 &&
-                           Math.abs(r.height - Math.round(hr.height)) < 50;
-                });
-                if (already) continue;
-
-                var himg = hel.querySelector('img[src]');
-                var hlink = hel.querySelector('a[href]');
-                var htext = '';
-                var htEl = hel.querySelector('h1,h2,h3,[class*="title"],[class*="text"]');
-                if (htEl) htext = htEl.textContent.trim().substring(0, 200);
-
-                results.push({
-                    type: 'hero',
-                    is_slider: false,
-                    selector: heroSelectors[hi],
-                    image_url: himg ? himg.src : '',
-                    link_url: hlink ? hlink.href : '',
-                    text: htext,
-                    width: Math.round(hr.width),
-                    height: Math.round(hr.height)
-                });
+                addArea(hel, 'hero', false, heroSelectors[hi]);
             }
         } catch(e) {}
     }
@@ -469,34 +504,28 @@ _JS_DETECT_BANNER_AREAS = """(() => {
                 var sbel = sbels[sbei];
                 var sbr = sbel.getBoundingClientRect();
                 if (sbr.width < vpW * 0.3 || sbr.height < 80) continue;
-
-                var sbAlready = results.some(function(r) {
-                    return Math.abs(r.width - Math.round(sbr.width)) < 50 &&
-                           Math.abs(r.height - Math.round(sbr.height)) < 50;
-                });
-                if (sbAlready) continue;
-
-                var sbImg = sbel.querySelector('img[src]');
-                var sbLink = sbel.querySelector('a[href]');
-                var sbText = '';
-                var sbTEl = sbel.querySelector('h1,h2,h3,[class*="title"],[class*="text"]');
-                if (sbTEl) sbText = sbTEl.textContent.trim().substring(0, 200);
-
-                results.push({
-                    type: 'sub_banner',
-                    is_slider: false,
-                    selector: subSelectors[sbi],
-                    image_url: sbImg ? sbImg.src : '',
-                    link_url: sbLink ? sbLink.href : '',
-                    text: sbText,
-                    width: Math.round(sbr.width),
-                    height: Math.round(sbr.height)
-                });
+                addArea(sbel, 'sub_banner', false, subSelectors[sbi]);
             }
         } catch(e) {}
     }
 
-    return results.length > 0 ? results : null;
+    if (results.length === 0) return null;
+
+    /* 면적 큰 순으로 정렬 후 상한 적용 */
+    results.sort(function(a, b) { return b.area - a.area; });
+    results = results.slice(0, MAX_AREAS);
+
+    /* 위치(top) 순 재정렬 */
+    results.sort(function(a, b) { return a.top - b.top; });
+
+    /* 내부 참조 제거 */
+    return results.map(function(r) {
+        var o = {};
+        for (var k in r) {
+            if (k !== '_el' && k !== 'top' && k !== 'area') o[k] = r[k];
+        }
+        return o;
+    });
 })()"""
 
 
@@ -569,10 +598,6 @@ _JS_EXTRACT_SLIDE = """(args) => {
 # ══════════════════════════════════════════════════════════════════
 # 유틸리티
 # ══════════════════════════════════════════════════════════════════
-
-def _log(msg: str):
-    print(f"{_TAG} {msg}")
-
 
 def _now() -> str:
     return datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
