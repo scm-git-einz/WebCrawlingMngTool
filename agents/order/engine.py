@@ -2,23 +2,33 @@
 주문서 결제정보 수집 에이전트
 
 상품 코드별로 상품상세 페이지 → 구매/주문 버튼 클릭 → 주문서 페이지 이동
-을 반복하여 상품별 최종결제금액을 수집한다.
+을 반복하여 상품별 결제정보를 수집한다.
 
 수집 필드 (상품 1건 기준):
-  - product_code  : 상품코드 (입력값)
-  - product_name  : 상품명 (주문서)
-  - payment_usd   : 최종결제금액 (달러)
-  - payment_krw   : 최종결제금액 (원화)
-  - discount_rate : 할인율 (예: "50%")
+  - product_code          : 상품코드 (입력값)
+  - brand                 : 브랜드명
+  - product_name          : 상품명
+  - regular_price_usd/krw : 정상가 (달러/원화)
+  - member_discount_usd/krw/reason : 회원할인 (달러/원화/사유)
+  - benefit_usd/krw/reason         : 혜택 (달러/원화/사유)
+  - payment_usd/krw       : 최종결제금액 (달러/원화)
+  - discount_rate         : 할인율 (예: "48%")
+  - duty_free_limit       : 면세한도적용금액
+  - tax_point             : 과세 포인트
+  - l_point               : 적립 L.POINT
 
 파이프라인:
   1. 브라우저 시작 (Headless Stealth + 쿠키 로드)
   2. 메인 도메인 로그인 + lps 서브도메인 사전 로그인 (2단계)
-  3. 상품 코드 목록(product_codes) 순회:
+  3. CouponAgent 호출 → 이벤트 URL 쿠폰 다운로드 (같은 page 세션 공유)
+  4. 상품 코드 목록(product_codes) 순회:
      a. 상품상세 URL 이동 (product_detail_url_template + prdNo)
-     b. 구매하기/주문하기 버튼 클릭 → 주문서 페이지 이동
-     c. 주문서에서 상품명 + 최종결제금액(USD/KRW/할인율) 추출
-  4. 전체 결과 JSON 저장
+     b. 상품상세 쿠폰 다운로드 (detail_coupon_selector)
+     c. 구매하기/주문하기 버튼 클릭 → 주문서 페이지 이동
+     d. 주문서 쿠폰 다운로드 (order_coupon_selector)
+     e. 출입국정보 등록 확인
+     f. 주문서에서 상품명 + 최종결제금액(USD/KRW/할인율) 추출
+  5. 전체 결과 JSON 저장
 
 봇 차단 대응:
   - BaseAgent 상속 (Stealth 브라우저, 적응형 백오프, 인간형 행동)
@@ -37,9 +47,11 @@ import time
 from datetime import datetime
 
 from core.base_agent import BaseAgent, DEFAULT_SETTINGS
+from core.failure_collector import FailureCollector
+from agents.coupon.engine import CouponAgent, JS_CLICK_COUPON
 
 
-_TAG = "[order]"
+# _TAG 제거: BaseAgent._log() 공통 로그 사용
 
 # ─── 바로구매 팝업 내부의 최종 "주문" 버튼 클릭 ────────────────
 # cartPopup('cartForm', '2') 호출 시 모달이 열리고, 그 안에서 수량/옵션 확인 후
@@ -178,37 +190,54 @@ _JS_CLICK_ORDER_BUTTON = """() => {
 }"""
 
 # ─── 주문서 결제정보 추출 ──────────────────────────────────────
-# 수집 필드 (4건):
-#   - product_name : 상품명
-#   - payment_usd  : 최종 결제금액 (달러)
-#   - payment_krw  : 최종 결제금액 (원화)
-#   - discount_rate: 할인율 (예: "50%")
+# 수집 필드 (15건):
+#   - brand             : 브랜드명 (예: "스파클링/샴페인 SPARKLING/CHAMPAGNE")
+#   - product_name      : 상품명 (예: "루이 로드레 크리스탈 2016 750ml")
+#   - regular_price_usd : 정상가 달러 (예: "$499")
+#   - regular_price_krw : 정상가 원화 (예: "757,681원")
+#   - member_discount_usd   : 회원할인 달러 (예: "-$49.9")
+#   - member_discount_krw   : 회원할인 원화 (예: "-75,769원")
+#   - member_discount_reason: 회원할인 사유 (예: "회원/상품/수량 할인")
+#   - benefit_usd       : 혜택 달러 (예: "-$188.63")
+#   - benefit_krw       : 혜택 원화 (예: "-286,416원")
+#   - benefit_reason    : 혜택 사유 (예: "기본혜택")
+#   - payment_usd       : 최종결제금액 달러 (예: "$260.47")
+#   - payment_krw       : 최종결제금액 원화 (예: "395,496원")
+#   - discount_rate     : 할인율 (예: "48%")
+#   - duty_free_limit   : 면세한도적용금액 (예: "$260.47")
+#   - tax_point         : 과세 포인트 (예: "$0")
+#   - l_point           : 적립 L.POINT (예: "684원")
 # (상품코드는 호출 측에서 전달한 prd_no를 사용)
 _JS_EXTRACT_ORDER_PAYMENT = """() => {
     const result = {
+        brand: '',
         product_name: '',
+        regular_price_usd: '',
+        regular_price_krw: '',
+        member_discount_usd: '',
+        member_discount_krw: '',
+        member_discount_reason: '',
+        benefit_usd: '',
+        benefit_krw: '',
+        benefit_reason: '',
         payment_usd: '',
         payment_krw: '',
         discount_rate: '',
+        duty_free_limit: '',
+        tax_point: '',
+        l_point: '',
     };
     const raw_texts = [];
 
-    const FINAL_LABELS = [
-        '최종결제금액', '총 결제금액', '결제금액', '결제 금액',
-        '총합계', '합계금액', '합계 금액', '총 합계',
-    ];
-
-    function matchFinal(text) {
-        const clean = (text || '').replace(/\\s+/g, ' ').trim();
-        return FINAL_LABELS.some(l => clean.includes(l));
-    }
+    /* ── 유틸리티 ── */
     function pickUsd(text) {
         const m = (text || '').match(/-?\\$[\\d,.]+/);
         return m ? m[0] : '';
     }
     function pickKrw(text) {
+        /* "(757,681원)" or "-75,769원" or "684원" */
         const m = (text || '').match(/\\(?(-?[\\d,]+)원\\)?/);
-        return m ? m[1] + '원' : '';
+        return m ? m[1].replace(/^\\(|\\)$/g, '') + '원' : '';
     }
     function pickRate(text) {
         const m = (text || '').match(/(\\d+)\\s*%/);
@@ -217,17 +246,103 @@ _JS_EXTRACT_ORDER_PAYMENT = """() => {
     function setIfEmpty(key, val) {
         if (val && !result[key]) result[key] = val;
     }
+    function cleanTit(el) {
+        const c = el.cloneNode(true);
+        c.querySelectorAll(
+            '.tooltipWrap, .ux_arrow, .btnTip, .contTip, .btnClose, i, em, script'
+        ).forEach(n => n.remove());
+        return c.textContent.trim().replace(/\\s+/g, ' ');
+    }
 
-    // ═══════════════════════════════════════════════════════
-    // 1) 면세점 신주문서 — dl.expected_payment
-    //    <dl class="expected_payment">
-    //      <dt>결제금액</dt>
-    //      <dd class="price">
-    //        <p><span>50%</span><strong>$251.49</strong></p>
-    //        (380,076원)
-    //      </dd>
-    //    </dl>
-    // ═══════════════════════════════════════════════════════
+    /* ═══════════════════════════════════════════════════════
+       1) 브랜드 + 상품명
+       <div class="info">
+         <a href="javascript:void(0)">
+           <div class="brand"><strong>스파클링/샴페인</strong> SPARKLING/CHAMPAGNE</div>
+           <div class="product">루이 로드레 크리스탈 2016 750ml</div>
+         </a>
+       </div>
+    ═══════════════════════════════════════════════════════ */
+    const brandSelectors = [
+        '.info > a > .brand', '.info .brand',
+        '[class*="prd_brand"]', '[class*="prdBrand"]',
+    ];
+    for (const sel of brandSelectors) {
+        const el = document.querySelector(sel);
+        if (!el) continue;
+        const txt = el.textContent.replace(/\\s+/g, ' ').trim();
+        if (txt) { result.brand = txt.substring(0, 200); break; }
+    }
+
+    const nameSelectors = [
+        '.info > a > .product', '.info .product',
+        '[class*="prd_name"]', '[class*="prdName"]',
+        '[class*="goods_name"]', '[class*="productName"]',
+        '[class*="item_name"]',
+        '.order_prd_list .name', '.order_prd_list .tit',
+    ];
+    for (const sel of nameSelectors) {
+        const el = document.querySelector(sel);
+        if (!el) continue;
+        const txt = el.textContent.replace(/\\s+/g, ' ').trim();
+        if (txt) { result.product_name = txt.substring(0, 200); break; }
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       2) 결제정보 상단 — totPaymentAmt1
+          정상가 / 회원할인 / 혜택
+       ═══════════════════════════════════════════════════════ */
+    const amt1 = document.querySelector(
+        'ul.totPaymentAmt1, ul.payment_info'
+    );
+    if (amt1) {
+        const items = amt1.querySelectorAll(':scope > li');
+        items.forEach(li => {
+            /* .tit 직접 자식이거나 dl > dt > .tit */
+            let titEl = li.querySelector(':scope > .tit')
+                     || li.querySelector('dt > .tit')
+                     || li.querySelector('.tit');
+            if (!titEl) return;
+            const label = cleanTit(titEl);
+
+            /* .price 형제 또는 dt 내부 */
+            let priceEl = li.querySelector(':scope > .price')
+                       || li.querySelector('dt > .price')
+                       || li.querySelector('.price');
+            const priceText = priceEl ? priceEl.textContent.replace(/\\s+/g, ' ').trim() : '';
+
+            /* 사유: dd > ul.info_flex_box > li > p 텍스트 합산 */
+            let reasons = [];
+            const dd = li.querySelector('dd');
+            if (dd) {
+                dd.querySelectorAll('ul.info_flex_box li p').forEach(p => {
+                    const t = p.textContent.trim();
+                    if (t) reasons.push(t);
+                });
+            }
+            const reasonText = reasons.join(', ');
+
+            if (/^정상가/.test(label)) {
+                setIfEmpty('regular_price_usd', pickUsd(priceText));
+                setIfEmpty('regular_price_krw', pickKrw(priceText));
+            } else if (/회원할인|회원\\/상품/.test(label)) {
+                setIfEmpty('member_discount_usd', pickUsd(priceText));
+                setIfEmpty('member_discount_krw', pickKrw(priceText));
+                setIfEmpty('member_discount_reason', reasonText);
+            } else if (/^혜택/.test(label)) {
+                setIfEmpty('benefit_usd', pickUsd(priceText));
+                setIfEmpty('benefit_krw', pickKrw(priceText));
+                setIfEmpty('benefit_reason', reasonText);
+            }
+        });
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       3) 결제정보 하단 — totPaymentAmt2
+          최종결제금액 / 면세한도 / 과세포인트 / 적립 L.POINT
+       ═══════════════════════════════════════════════════════ */
+
+    /* 3-a) dl.expected_payment → 최종결제금액 + 할인율 */
     const expectedDl = document.querySelector(
         'dl.expected_payment, dl[class*="expected"], dl[class*="payment_total"]'
     );
@@ -242,39 +357,37 @@ _JS_EXTRACT_ORDER_PAYMENT = """() => {
         }
     }
 
-    // ═══════════════════════════════════════════════════════
-    // 2) dl/dt-dd 라벨 매칭 (결제금액 라벨만)
-    // ═══════════════════════════════════════════════════════
-    document.querySelectorAll('dl').forEach(dl => {
-        const dts = dl.querySelectorAll('dt');
-        const dds = dl.querySelectorAll('dd');
-        dts.forEach((dt, i) => {
-            if (!matchFinal(dt.textContent) || !dds[i]) return;
-            const ddText = dds[i].textContent || '';
-            setIfEmpty('payment_usd', pickUsd(ddText));
-            setIfEmpty('payment_krw', pickKrw(ddText));
-            setIfEmpty('discount_rate', pickRate(ddText));
-        });
-    });
+    /* 3-b) .duty_free_limit → 면세한도, 과세포인트, 적립 L.POINT */
+    const dutyArea = document.querySelector(
+        '.duty_free_limit, [class*="duty_free"], [class*="dutyFree"]'
+    );
+    if (dutyArea) {
+        dutyArea.querySelectorAll('li').forEach(li => {
+            const titEl = li.querySelector('.tit');
+            if (!titEl) return;
+            const label = cleanTit(titEl);
+            const priceEl = li.querySelector('.price');
+            const priceText = priceEl ? priceEl.textContent.replace(/\\s+/g, ' ').trim() : '';
 
-    // ═══════════════════════════════════════════════════════
-    // 3) .tit + .price 페어 (롯데 신주문서 .totalPayment)
-    //    <li><div class="tit">결제금액</div>
-    //        <div class="price"><strong>$251.49</strong><span>(380,076원)</span></div>
-    //    </li>
-    // ═══════════════════════════════════════════════════════
-    const payScope = document.querySelector(
-        '.totalPayment, [class*="totalPayment"], [class*="payment_info"]'
-    ) || document;
-    function cleanTit(el) {
-        const c = el.cloneNode(true);
-        c.querySelectorAll(
-            '.tooltipWrap, .ux_arrow, .btnTip, .contTip, .btnClose, i, em, script'
-        ).forEach(n => n.remove());
-        return c.textContent.trim().replace(/\\s+/g, ' ');
+            if (/면세한도/.test(label)) {
+                setIfEmpty('duty_free_limit', priceText);
+            } else if (/과세.*포인트/.test(label)) {
+                setIfEmpty('tax_point', priceText);
+            } else if (/L\\.?POINT|적립/.test(label)) {
+                setIfEmpty('l_point', priceText);
+            }
+        });
     }
+
+    /* ═══════════════════════════════════════════════════════
+       4) 폴백 — .tit + .price 페어 (결제금액 라벨)
+       ═══════════════════════════════════════════════════════ */
+    const payScope = document.querySelector(
+        '.totalPayment, [class*="totalPayment"]'
+    ) || document;
     payScope.querySelectorAll('.tit').forEach(titEl => {
-        if (!matchFinal(cleanTit(titEl))) return;
+        const label = cleanTit(titEl);
+        if (!/결제금액|최종결제|총합계/.test(label)) return;
         let priceEl = titEl.nextElementSibling;
         if (!priceEl || !priceEl.classList || !priceEl.classList.contains('price')) {
             const parent = titEl.parentElement;
@@ -287,35 +400,9 @@ _JS_EXTRACT_ORDER_PAYMENT = """() => {
         setIfEmpty('discount_rate', pickRate(priceText));
     });
 
-    // ═══════════════════════════════════════════════════════
-    // 4) 상품명 — 롯데면세점 주문서 구조
-    //    <div class="info">
-    //      <a href="javascript:void(0)">
-    //        <div class="brand"><strong>다이슨</strong> DYSON</div>
-    //        <div class="product">다이슨 에어랩 i.d.™ ...</div>
-    //      </a>
-    //    </div>
-    // ═══════════════════════════════════════════════════════
-    const nameCandidates = [
-        '.info > a > .product', '.info .product',  // 롯데면세점 신주문서
-        '[class*="prd_name"]', '[class*="prdName"]',
-        '[class*="goods_name"]', '[class*="productName"]',
-        '[class*="item_name"]',
-        '.order_prd_list .name', '.order_prd_list .tit',
-    ];
-    for (const sel of nameCandidates) {
-        const el = document.querySelector(sel);
-        if (!el) continue;
-        const txt = el.textContent.replace(/\\s+/g, ' ').trim();
-        if (txt) {
-            result.product_name = txt.substring(0, 200);
-            break;
-        }
-    }
-
-    // ═══════════════════════════════════════════════════════
-    // 디버그용 raw text (결제정보 누락 시 로그)
-    // ═══════════════════════════════════════════════════════
+    /* ═══════════════════════════════════════════════════════
+       5) 디버그용 raw text (결제정보 누락 시 로그)
+       ═══════════════════════════════════════════════════════ */
     if (!result.payment_usd && !result.payment_krw) {
         const payAreas = document.querySelectorAll(
             '[class*="pay"], [class*="settle"], [class*="expected"], ' +
@@ -371,6 +458,11 @@ class OrderAgent(BaseAgent):
                 "https://kor.lps.lottedfs.com/kr/member/login"
             )
         cfg.setdefault("login_config", {})
+        cfg.setdefault("order_coupon_selector", "")
+        cfg.setdefault("event_coupons", [])
+        cfg.setdefault("detail_coupon_selector", "")
+        # collect_fields: 수집할 결제정보 필드 목록 (비어있으면 전체 수집)
+        cfg.setdefault("collect_fields", [])
         return cfg
 
     @staticmethod
@@ -598,6 +690,7 @@ class OrderAgent(BaseAgent):
         start_time = time.time()
         result_id = self.db.create_result(site_id)
         all_results = []
+        self._failure_collector = FailureCollector(site_id, result_id, self.agent_type)
 
         try:
             # ── 1. 브라우저 시작 (ProductAgent 동일 패턴) ──────────
@@ -625,6 +718,11 @@ class OrderAgent(BaseAgent):
             resp = self._safe_goto(login_url)
             if self._is_blocked(resp):
                 self._log(f"로그인 페이지 차단됨 (HTTP {resp.status if resp else 'N/A'})")
+                self._record_failure(
+                    "login_fail", "로그인 페이지 차단",
+                    subtype="page_blocked", url=login_url,
+                    context={"proxy": self._proxy_ip},
+                )
                 self._finish_result(result_id, "blocked", start_time, "로그인 페이지 차단")
                 return
 
@@ -645,6 +743,10 @@ class OrderAgent(BaseAgent):
                 )
                 if not login_ok:
                     self._log("로그인 실패")
+                    self._record_failure(
+                        "login_fail", "로그인 실패",
+                        subtype="login_failed", url=login_url,
+                    )
                     self._finish_result(
                         result_id, "error", start_time, "로그인 실패",
                     )
@@ -684,15 +786,53 @@ class OrderAgent(BaseAgent):
             self._human_dwell()
             self._delay()
 
-            # ── 3. 상품 코드 목록 확인 ────────────────────────────
+            # ── 3. CouponAgent로 이벤트 쿠폰 다운로드 ──────────────
+            event_coupons = cfg.get("event_coupons") or []
+            event_list_url = cfg.get("event_list_url", "").strip()
+            coupon_keywords = cfg.get("coupon_keywords") or []
+            has_manual = bool(event_coupons)
+            has_auto = bool(event_list_url and coupon_keywords)
+
+            if has_manual or has_auto:
+                coupon_agent = CouponAgent(db=self.db)
+                coupon_agent._log = self._log  # 로그 공유
+
+                # 수동 등록 이벤트 쿠폰
+                if has_manual:
+                    self._log(f"\n── CouponAgent: 이벤트 쿠폰 다운로드 ({len(event_coupons)}건) ──")
+                    event_results = coupon_agent.run_event_coupons(
+                        self.page, event_coupons,
+                    )
+                    event_success = sum(
+                        1 for r in event_results if r.get("success", 0) > 0
+                    )
+                    self._log(f"  이벤트 쿠폰 완료: {event_success}/{len(event_results)}건 성공")
+
+                # 자동 탐색 이벤트 쿠폰
+                if has_auto:
+                    self._log(f"\n── CouponAgent: 자동 탐색 쿠폰 (키워드 {len(coupon_keywords)}개) ──")
+                    auto_results = coupon_agent.run_auto_discovery_coupons(
+                        self.page, event_list_url, coupon_keywords,
+                    )
+                    auto_success = sum(
+                        1 for r in auto_results if r.get("success", 0) > 0
+                    )
+                    self._log(f"  자동 탐색 쿠폰 완료: {auto_success}/{len(auto_results)}건 성공")
+            else:
+                self._log("이벤트 쿠폰 설정 없음 — 건너뜀")
+
+            # ── 4. 상품 코드 목록 확인 ────────────────────────────
             if not product_codes:
                 self._log("등록된 상품 코드가 없습니다. (crawl_config.product_codes)")
                 self._finish_result(result_id, "success", start_time)
                 return
 
             url_template = cfg.get("product_detail_url_template", "")
+            detail_coupon_sel = cfg.get("detail_coupon_selector", "").strip()
             order_url_pattern = self._order_url_pattern(cfg.get("order_url", ""))
             self._log(f"상품 코드 {len(product_codes)}건 순회 시작")
+            if detail_coupon_sel:
+                self._log(f"  상품상세 쿠폰: {detail_coupon_sel}")
 
             # ── 4. 상품별 반복: 상품상세 → 주문/구매 클릭 → 주문서 → 결제정보 ─
             for i, prd_no in enumerate(product_codes):
@@ -703,15 +843,15 @@ class OrderAgent(BaseAgent):
                 resp = self._safe_goto(detail_url)
                 if self._is_blocked(resp):
                     self._log(f"  상품상세 차단됨 (HTTP {resp.status if resp else 'N/A'})")
-                    all_results.append({
-                        "product_code": prd_no,
-                        "product_name": "",
-                        "payment_usd": "",
-                        "payment_krw": "",
-                        "discount_rate": "",
-                        "detail_url": detail_url,
-                        "error": "상품상세 차단",
-                    })
+                    self._record_failure(
+                        "http_block", f"상품상세 차단 (상품코드 {prd_no})",
+                        subtype=str(resp.status) if resp else "unknown",
+                        url=detail_url, target=str(prd_no),
+                        context={"proxy": self._proxy_ip},
+                    )
+                    all_results.append(self._empty_result(
+                        prd_no, detail_url, "", "상품상세 차단",
+                    ))
                     continue
 
                 self.page.wait_for_timeout(DEFAULT_SETTINGS["initial_wait_ms"])
@@ -739,20 +879,25 @@ class OrderAgent(BaseAgent):
                     # 재로그인 후에도 여전히 로그인 페이지이면 건너뜀
                     if "member/login" in cur_url:
                         self._log(f"  성인인증 상품 접근 실패 (→ {cur_url[:100]})")
-                        all_results.append({
-                            "product_code": prd_no,
-                            "product_name": "",
-                            "payment_usd": "",
-                            "payment_krw": "",
-                            "discount_rate": "",
-                            "detail_url": detail_url,
-                            "order_url": cur_url,
-                            "error": "성인인증 상품 - 접근 실패",
-                        })
+                        all_results.append(self._empty_result(
+                            prd_no, detail_url, cur_url,
+                            "성인인증 상품 - 성인인증 후 수집 가능",
+                        ))
                         continue
 
                 self._human_dwell()
                 self._human_scroll()
+
+                # 상품상세 쿠폰 다운로드
+                if detail_coupon_sel:
+                    self._log("  상품상세 쿠폰 다운로드...")
+                    coupon_results = self.page.evaluate(
+                        JS_CLICK_COUPON, detail_coupon_sel,
+                    )
+                    if isinstance(coupon_results, list):
+                        success = sum(1 for r in coupon_results if r.get("ok"))
+                        self._log(f"    쿠폰 클릭: {success}/{len(coupon_results)}건 성공")
+                    self.page.wait_for_timeout(2000)
 
                 # 바로구매 → 팝업/로그인 모달 처리 → 주문서 도달까지 일괄 수행
                 self._log("  바로구매 흐름 시작")
@@ -763,46 +908,119 @@ class OrderAgent(BaseAgent):
                 self._log(f"  현재 URL: {self.page.url[:120]}")
                 if not reached:
                     self._log("  주문서 도달 실패")
-                    all_results.append({
-                        "product_code": prd_no,
-                        "product_name": "",
-                        "payment_usd": "",
-                        "payment_krw": "",
-                        "discount_rate": "",
-                        "detail_url": detail_url,
-                        "order_url": self.page.url,
-                        "error": "주문서 미도달",
-                    })
+                    self._record_failure(
+                        "nav_fail", f"주문서 도달 실패 (상품코드 {prd_no})",
+                        subtype="order_page", url=self.page.url, target=str(prd_no),
+                    )
+                    all_results.append(self._empty_result(
+                        prd_no, detail_url, self.page.url, "주문서 미도달",
+                    ))
                     continue
+
+                # 출입국정보 등록 확인
+                departure_ok = self.page.evaluate("""() => {
+                    const cont = document.querySelector('.info_cont.form_type');
+                    if (!cont) return true;  // 출입국 영역 없으면 통과
+                    const dprtInput = cont.querySelector('input[title="출국일"]');
+                    if (!dprtInput) return true;
+                    return !!(dprtInput.value && dprtInput.value.trim());
+                }""")
+                if not departure_ok:
+                    self._log("  출입국정보미등록 - 출입국정보 등록 후 수집 가능")
+                    self._record_failure(
+                        "data_fail", f"출입국정보 미등록 (상품코드 {prd_no})",
+                        subtype="departure_info", url=self.page.url, target=str(prd_no),
+                    )
+                    all_results.append(self._empty_result(
+                        prd_no, detail_url, self.page.url,
+                        "출입국정보미등록 - 출입국정보 등록 후 수집 가능",
+                    ))
+                    continue
+
+                # 주문서 쿠폰 다운로드
+                order_coupon_sel = cfg.get("order_coupon_selector", "").strip()
+                if order_coupon_sel:
+                    self._log("  주문서 쿠폰 다운로드...")
+                    coupon_results = self.page.evaluate(
+                        JS_CLICK_COUPON, order_coupon_sel,
+                    )
+                    if isinstance(coupon_results, list):
+                        success = sum(1 for r in coupon_results if r.get("ok"))
+                        self._log(f"    쿠폰 클릭: {success}/{len(coupon_results)}건 성공")
+                    self.page.wait_for_timeout(2000)
 
                 # 결제정보 추출
                 self._log("  결제정보 추출 중...")
                 data = self.page.evaluate(_JS_EXTRACT_ORDER_PAYMENT)
+
+                brand = data.get("brand", "")
                 product_name = data.get("product_name", "")
                 payment_usd = data.get("payment_usd", "")
                 payment_krw = data.get("payment_krw", "")
-                discount_rate = data.get("discount_rate", "")
 
                 has_payment = bool(payment_usd or payment_krw)
                 if has_payment:
-                    self._log(f"    상품명     : {product_name or '(미수집)'}")
-                    self._log(f"    결제금액(USD): {payment_usd or '-'}")
-                    self._log(f"    결제금액(KRW): {payment_krw or '-'}")
-                    self._log(f"    할인율      : {discount_rate or '-'}")
+                    self._log(f"    브랜드       : {brand or '-'}")
+                    self._log(f"    상품명       : {product_name or '(미수집)'}")
+                    self._log(f"    정상가       : {data.get('regular_price_usd', '-')} / {data.get('regular_price_krw', '-')}")
+                    self._log(f"    회원할인     : {data.get('member_discount_usd', '-')} / {data.get('member_discount_krw', '-')} ({data.get('member_discount_reason', '-')})")
+                    self._log(f"    혜택         : {data.get('benefit_usd', '-')} / {data.get('benefit_krw', '-')} ({data.get('benefit_reason', '-')})")
+                    self._log(f"    최종결제금액 : {payment_usd or '-'} / {payment_krw or '-'}")
+                    self._log(f"    할인율       : {data.get('discount_rate', '-')}")
+                    self._log(f"    면세한도     : {data.get('duty_free_limit', '-')}")
+                    self._log(f"    과세포인트   : {data.get('tax_point', '-')}")
+                    self._log(f"    적립 L.POINT : {data.get('l_point', '-')}")
+                    all_results.append({
+                        "product_code": prd_no,
+                        "brand": brand,
+                        "product_name": product_name,
+                        "regular_price_usd": data.get("regular_price_usd", ""),
+                        "regular_price_krw": data.get("regular_price_krw", ""),
+                        "member_discount_usd": data.get("member_discount_usd", ""),
+                        "member_discount_krw": data.get("member_discount_krw", ""),
+                        "member_discount_reason": data.get("member_discount_reason", ""),
+                        "benefit_usd": data.get("benefit_usd", ""),
+                        "benefit_krw": data.get("benefit_krw", ""),
+                        "benefit_reason": data.get("benefit_reason", ""),
+                        "payment_usd": payment_usd,
+                        "payment_krw": payment_krw,
+                        "discount_rate": data.get("discount_rate", ""),
+                        "duty_free_limit": data.get("duty_free_limit", ""),
+                        "tax_point": data.get("tax_point", ""),
+                        "l_point": data.get("l_point", ""),
+                        "detail_url": detail_url,
+                        "order_url": self.page.url,
+                    })
                 else:
-                    self._log("  결제금액을 찾지 못했습니다.")
+                    self._log("  결제정보 없음 — 출입국정보 미등록으로 주문서 데이터 수집 불가")
+                    self._record_failure(
+                        "data_fail", f"결제정보 없음 (상품코드 {prd_no})",
+                        subtype="payment_info", url=self.page.url, target=str(prd_no),
+                    )
                     for rt in data.get("raw_texts", [])[:2]:
                         self._log(f"    raw: {rt[:150]}")
-
-                all_results.append({
-                    "product_code": prd_no,
-                    "product_name": product_name,
-                    "payment_usd": payment_usd,
-                    "payment_krw": payment_krw,
-                    "discount_rate": discount_rate,
-                    "detail_url": detail_url,
-                    "order_url": self.page.url,
-                })
+                    all_results.append({
+                        "product_code": prd_no,
+                        "brand": brand,
+                        "product_name": product_name,
+                        "regular_price_usd": "",
+                        "regular_price_krw": "",
+                        "member_discount_usd": "",
+                        "member_discount_krw": "",
+                        "member_discount_reason": "",
+                        "benefit_usd": "",
+                        "benefit_krw": "",
+                        "benefit_reason": "",
+                        "payment_usd": "",
+                        "payment_krw": "",
+                        "discount_rate": "",
+                        "duty_free_limit": "",
+                        "tax_point": "",
+                        "l_point": "",
+                        "detail_url": detail_url,
+                        "order_url": self.page.url,
+                        "error": "출입국정보미등록 - 출입국정보 등록 후 수집 가능",
+                    })
 
                 self._delay()
 
@@ -810,7 +1028,12 @@ class OrderAgent(BaseAgent):
             self._log("\n로그아웃 진행")
             self._logout(site_url)
 
-            # ── 6. 전체 결과 저장 ─────────────────────────────────
+            # ── 6. collect_fields 필터링 + 전체 결과 저장 ─────────
+            collect_fields = cfg.get("collect_fields") or []
+            if collect_fields:
+                all_results = self._filter_fields(all_results, collect_fields)
+                self._log(f"수집 항목 필터: {len(collect_fields)}개 필드 선택")
+
             success_count = sum(
                 1 for r in all_results
                 if r.get("payment_usd") or r.get("payment_krw")
@@ -846,8 +1069,11 @@ class OrderAgent(BaseAgent):
             self._log(f"오류 발생: {e}")
             import traceback
             self._log(traceback.format_exc())
+            self._record_failure("exception", f"오류 발생: {e}")
             self._finish_result(result_id, "error", start_time, str(e))
         finally:
+            if self._failure_collector:
+                self._failure_collector.save(self.db)
             try:
                 self.browser_mgr.close()
             except Exception:
@@ -856,6 +1082,49 @@ class OrderAgent(BaseAgent):
     # ═══════════════════════════════════════════════════════════════
     # 헬퍼 메서드
     # ═══════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _filter_fields(results: list, collect_fields: list) -> list:
+        """사용자가 선택한 수집 항목만 남기고 나머지 필드는 제거한다.
+
+        product_code, product_name, detail_url, order_url, error는 항상 유지.
+        """
+        keep = set(collect_fields) | {
+            "product_code", "product_name", "detail_url", "order_url", "error",
+        }
+        filtered = []
+        for r in results:
+            filtered.append({k: v for k, v in r.items() if k in keep})
+        return filtered
+
+    @staticmethod
+    def _empty_result(
+        product_code: str, detail_url: str,
+        order_url: str, error: str,
+    ) -> dict:
+        """에러 시 빈 결과 레코드를 생성한다 (전체 필드 일관성 유지)."""
+        return {
+            "product_code": product_code,
+            "brand": "",
+            "product_name": "",
+            "regular_price_usd": "",
+            "regular_price_krw": "",
+            "member_discount_usd": "",
+            "member_discount_krw": "",
+            "member_discount_reason": "",
+            "benefit_usd": "",
+            "benefit_krw": "",
+            "benefit_reason": "",
+            "payment_usd": "",
+            "payment_krw": "",
+            "discount_rate": "",
+            "duty_free_limit": "",
+            "tax_point": "",
+            "l_point": "",
+            "detail_url": detail_url,
+            "order_url": order_url,
+            "error": error,
+        }
 
     def _logout(self, site_url: str):
         """롯데면세점 홈으로 이동 후 javascript:logout() 호출."""
@@ -930,9 +1199,4 @@ class OrderAgent(BaseAgent):
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
 
-    def _log(self, msg):
-        """UnicodeEncodeError 안전 로그 출력."""
-        try:
-            print(f"{_TAG} {msg}")
-        except UnicodeEncodeError:
-            print(f"{_TAG} {msg.encode('utf-8', errors='replace').decode('utf-8')}")
+    # _log()는 BaseAgent에서 상속 (날짜/시간 포함 출력)

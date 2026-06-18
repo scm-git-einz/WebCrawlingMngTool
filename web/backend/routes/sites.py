@@ -55,6 +55,44 @@ def _site_to_dict(row) -> dict:
     return d
 
 
+@router.get("/agent-fields")
+def list_agent_fields(agent_type: str | None = None):
+    db = _db()
+    try:
+        rows = db.get_agent_field_defs(agent_type)
+        grouped = {}
+        for r in rows:
+            at = r["agent_type"]
+            if at not in grouped:
+                grouped[at] = []
+            grouped[at].append({
+                "key": r["field_key"],
+                "label": r["label"],
+                "config_key": r["config_key"],
+                "sort_order": r["sort_order"],
+            })
+        return grouped
+    finally:
+        db.close()
+
+
+@router.put("/agent-fields/{agent_type}")
+def update_agent_fields(agent_type: str, body: list[dict]):
+    db = _db()
+    try:
+        for i, f in enumerate(body):
+            db.upsert_agent_field_def(
+                agent_type=agent_type,
+                field_key=f["key"],
+                label=f.get("label", f["key"]),
+                config_key=f.get("config_key", ""),
+                sort_order=f.get("sort_order", i),
+            )
+        return {"ok": True}
+    finally:
+        db.close()
+
+
 @router.get("/sites")
 def list_sites():
     db = _db()
@@ -150,22 +188,22 @@ def update_site(site_id: int, body: SiteUpdate):
         updates = []
         params = []
         if body.site_name is not None:
-            updates.append("site_name = ?")
+            updates.append("site_name = %s")
             params.append(body.site_name)
         if body.site_url is not None:
-            updates.append("site_url = ?")
+            updates.append("site_url = %s")
             params.append(body.site_url)
         if body.agent_type is not None:
-            updates.append("agent_type = ?")
+            updates.append("agent_type = %s")
             params.append(body.agent_type)
         if body.category is not None:
-            updates.append("category = ?")
+            updates.append("category = %s")
             params.append(body.category)
         if updates:
-            updates.append("updated_at = datetime('now','localtime')")
+            updates.append("updated_at = NOW()")
             params.append(site_id)
             cur.execute(
-                f"UPDATE crawl_sites SET {', '.join(updates)} WHERE id = ?",
+                f"UPDATE crawl_sites SET {', '.join(updates)} WHERE id = %s",
                 params,
             )
             db.conn.commit()
@@ -318,9 +356,9 @@ def batch_update_schedule(body: dict):
     db = _db()
     try:
         cur = db._cur()
-        placeholders = ",".join("?" for _ in site_ids)
+        placeholders = ",".join("%s" for _ in site_ids)
         cur.execute(
-            f"UPDATE crawl_sites SET crawl_schedule=?, updated_at=datetime('now','localtime') "
+            f"UPDATE crawl_sites SET crawl_schedule=%s, updated_at=NOW() "
             f"WHERE id IN ({placeholders})",
             [schedule] + site_ids,
         )
@@ -339,7 +377,7 @@ def update_schedule(site_id: int, body: ScheduleBody):
             raise HTTPException(404, "사이트를 찾을 수 없습니다")
         cur = db._cur()
         cur.execute(
-            "UPDATE crawl_sites SET crawl_schedule=?, updated_at=datetime('now','localtime') WHERE id=?",
+            "UPDATE crawl_sites SET crawl_schedule=%s, updated_at=NOW() WHERE id=%s",
             (body.schedule, site_id),
         )
         db.conn.commit()
@@ -518,6 +556,15 @@ def stop_crawl(body: dict):
                         except Exception:
                             pass
                     _cleanup_finished(pid)
+
+                    # DB에서 running → stopped 상태 변경
+                    try:
+                        db = _db()
+                        changed = db.mark_running_as_stopped(sid)
+                        db.close()
+                    except Exception:
+                        pass
+
                     results.append({
                         "site_id": sid,
                         "status": "stopped",

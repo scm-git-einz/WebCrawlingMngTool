@@ -4,6 +4,13 @@ import { useSearchParams } from 'react-router-dom'
 const STATUS_CLASS = {
   success: 'success', running: 'running',
   pending: 'pending', failed: 'failed',
+  stopped: 'stopped',
+}
+
+const STATUS_LABEL = {
+  success: '성공', running: '실행중',
+  pending: '대기', failed: '실패',
+  stopped: '강제종료',
 }
 
 const AGENT_LABELS = {
@@ -239,7 +246,7 @@ function ResultRow({ r, isExpanded, detail, onToggle }) {
       <tr>
         <td style={{color:'var(--text-secondary)',fontSize:12}}>{r.id}</td>
         <td style={{fontSize:12,whiteSpace:'nowrap',fontWeight:500}}>{time}</td>
-        <td><span className={`badge ${STATUS_CLASS[r.status] || ''}`}>{r.status}</span></td>
+        <td><span className={`badge ${STATUS_CLASS[r.status] || ''}`}>{STATUS_LABEL[r.status] || r.status}</span></td>
         <td style={{fontWeight:600}}>{r.product_count || 0}</td>
         <td style={{fontSize:12,color:'var(--text-secondary)'}}>{r.elapsed_sec ? `${r.elapsed_sec.toFixed(1)}s` : '-'}</td>
         <td>
@@ -279,6 +286,7 @@ function ExpandedDetail({ detail }) {
       {agentType === 'order'     && <OrderDetail      detail={detail} />}
       {agentType === 'brand'     && <BrandDetail      detail={detail} />}
       {agentType === 'local'     && <LocalDetail      detail={detail} />}
+      {agentType === 'coupon'    && <CouponDetail     detail={detail} />}
     </div>
   )
 }
@@ -286,7 +294,7 @@ function ExpandedDetail({ detail }) {
 
 /* ── product: 매장 상품 결과 ────────────────────── */
 function ProductDetail({ detail }) {
-  const products = detail.products || []
+  const products = detail.items || []
   const storeInfo = detail.store_info || {}
   const storeName = storeInfo.store_name || storeInfo.name || ''
   const hasStore = storeName && storeName !== 'N/A'
@@ -454,7 +462,7 @@ function ProductDetail({ detail }) {
 
 /* ── news: 뉴스 기사 결과 ──────────────────────── */
 function NewsDetail({ detail }) {
-  const articles = detail.products || []
+  const articles = detail.items || []
 
   // 키워드별 그룹핑
   const byKeyword = {}
@@ -523,7 +531,7 @@ function NewsDetail({ detail }) {
 
 /* ── cafe: 카페 게시글 + 가격 결과 ──────────────── */
 function CafeDetail({ detail }) {
-  const products = detail.products || []
+  const products = detail.items || []
 
   // 가격 정보 추출
   const allPrices = []
@@ -643,7 +651,7 @@ function CafeDetail({ detail }) {
 
 /* ── promotion: 이벤트/프로모션 결과 ──────────────── */
 function PromotionDetail({ detail }) {
-  const events = detail.products || []
+  const events = detail.items || []
   const storeInfo = detail.store_info || {}
   const storeName = storeInfo.store_name || ''
 
@@ -811,7 +819,7 @@ function PromotionDetail({ detail }) {
 
 /* ── banner: 배너/비주얼 결과 ───────────────────── */
 function BannerDetail({ detail }) {
-  const banners = detail.products || []
+  const banners = detail.items || []
   const storeInfo = detail.store_info || {}
   const storeName = storeInfo.store_name || storeInfo.name || ''
 
@@ -879,7 +887,7 @@ function BannerDetail({ detail }) {
 
 /* ── directory: 브랜드/이벤트 목록 결과 ─────────── */
 function DirectoryDetail({ detail }) {
-  const items = detail.products || []
+  const items = detail.items || []
   const storeInfo = detail.store_info || {}
   const storeName = storeInfo.store_name || storeInfo.name || ''
 
@@ -991,10 +999,22 @@ function orderRowFields(r) {
   const item = r.order_item || r.cart_item || {}
   return {
     product_code: r.product_code || '',
+    brand: r.brand || '',
     product_name: r.product_name || item.name || '',
+    regular_price_usd: r.regular_price_usd || '',
+    regular_price_krw: r.regular_price_krw || '',
+    member_discount_usd: r.member_discount_usd || '',
+    member_discount_krw: r.member_discount_krw || '',
+    member_discount_reason: r.member_discount_reason || '',
+    benefit_usd: r.benefit_usd || '',
+    benefit_krw: r.benefit_krw || '',
+    benefit_reason: r.benefit_reason || '',
     payment_usd: r.payment_usd || pay.payment_usd || pay.payment_amount || '',
     payment_krw: r.payment_krw || pay.payment_krw || '',
     discount_rate: r.discount_rate || pay.discount_rate || '',
+    duty_free_limit: r.duty_free_limit || '',
+    tax_point: r.tax_point || '',
+    l_point: r.l_point || '',
     error: r.error || '',
   }
 }
@@ -1094,7 +1114,7 @@ function BrandDetail({ detail }) {
 
 
 function OrderDetail({ detail }) {
-  const results = detail.products || []
+  const results = detail.items || []
   const storeInfo = detail.store_info || {}
   const successCount = storeInfo.success_count ?? results.filter(r => {
     const f = orderRowFields(r)
@@ -1114,11 +1134,23 @@ function OrderDetail({ detail }) {
             <thead>
               <tr>
                 <th style={{width:30}}>#</th>
-                <th style={{width:130}}>상품코드</th>
+                <th style={{width:110}}>상품코드</th>
+                <th style={{width:100}}>브랜드</th>
                 <th>상품명</th>
-                <th style={{width:70,textAlign:'center'}}>할인율</th>
-                <th style={{width:110,textAlign:'right'}}>결제금액($)</th>
-                <th style={{width:130,textAlign:'right'}}>결제금액(원)</th>
+                <th style={{width:90,textAlign:'right'}}>정상가($)</th>
+                <th style={{width:100,textAlign:'right'}}>정상가(원)</th>
+                <th style={{width:90,textAlign:'right'}}>회원할인($)</th>
+                <th style={{width:100,textAlign:'right'}}>회원할인(원)</th>
+                <th style={{width:120}}>회원할인사유</th>
+                <th style={{width:90,textAlign:'right'}}>혜택($)</th>
+                <th style={{width:100,textAlign:'right'}}>혜택(원)</th>
+                <th style={{width:100}}>혜택사유</th>
+                <th style={{width:60,textAlign:'center'}}>할인율</th>
+                <th style={{width:100,textAlign:'right'}}>결제금액($)</th>
+                <th style={{width:110,textAlign:'right'}}>결제금액(원)</th>
+                <th style={{width:100,textAlign:'right'}}>면세한도</th>
+                <th style={{width:80,textAlign:'right'}}>과세포인트</th>
+                <th style={{width:90,textAlign:'right'}}>적립 L.POINT</th>
               </tr>
             </thead>
             <tbody>
@@ -1128,11 +1160,34 @@ function OrderDetail({ detail }) {
                 return (
                   <tr key={i}>
                     <td style={{color:'var(--text-secondary)'}}>{i + 1}</td>
-                    <td style={{fontFamily:'monospace',fontSize:12}}>
+                    <td style={{fontFamily:'monospace',fontSize:11}}>
                       {f.product_code || '-'}
                     </td>
-                    <td style={{fontWeight:500,maxWidth:300,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                    <td style={{fontSize:12,maxWidth:100,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={f.brand}>
+                      {f.brand || '-'}
+                    </td>
+                    <td style={{fontWeight:500,maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={f.product_name}>
                       {f.product_name || (missing && f.error ? <span style={{color:'var(--danger)'}}>{f.error}</span> : '-')}
+                    </td>
+                    <td style={{textAlign:'right',fontSize:12}}>{f.regular_price_usd || '-'}</td>
+                    <td style={{textAlign:'right',fontSize:12}}>{f.regular_price_krw || '-'}</td>
+                    <td style={{textAlign:'right',fontSize:12,color: f.member_discount_usd ? 'var(--primary)' : 'var(--text-secondary)'}}>
+                      {f.member_discount_usd || '-'}
+                    </td>
+                    <td style={{textAlign:'right',fontSize:12,color: f.member_discount_krw ? 'var(--primary)' : 'var(--text-secondary)'}}>
+                      {f.member_discount_krw || '-'}
+                    </td>
+                    <td style={{fontSize:11,color:'var(--text-secondary)',maxWidth:120,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={f.member_discount_reason}>
+                      {f.member_discount_reason || '-'}
+                    </td>
+                    <td style={{textAlign:'right',fontSize:12,color: f.benefit_usd ? 'var(--success)' : 'var(--text-secondary)'}}>
+                      {f.benefit_usd || '-'}
+                    </td>
+                    <td style={{textAlign:'right',fontSize:12,color: f.benefit_krw ? 'var(--success)' : 'var(--text-secondary)'}}>
+                      {f.benefit_krw || '-'}
+                    </td>
+                    <td style={{fontSize:11,color:'var(--text-secondary)',maxWidth:100,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={f.benefit_reason}>
+                      {f.benefit_reason || '-'}
                     </td>
                     <td style={{textAlign:'center',color: f.discount_rate ? 'var(--danger)' : 'var(--text-secondary)',fontWeight:600}}>
                       {f.discount_rate || '-'}
@@ -1143,6 +1198,9 @@ function OrderDetail({ detail }) {
                     <td style={{textAlign:'right',fontWeight:600}}>
                       {f.payment_krw || '-'}
                     </td>
+                    <td style={{textAlign:'right',fontSize:12}}>{f.duty_free_limit || '-'}</td>
+                    <td style={{textAlign:'right',fontSize:12}}>{f.tax_point || '-'}</td>
+                    <td style={{textAlign:'right',fontSize:12}}>{f.l_point || '-'}</td>
                   </tr>
                 )
               })}
@@ -1214,6 +1272,72 @@ function LocalDetail({ detail }) {
 
       {results.length === 0 && (
         <div className="empty-state">수집된 상품 정보가 없습니다</div>
+      )}
+    </>
+  )
+}
+
+
+/* ── coupon: 쿠폰 다운로드 결과 ────────────────────── */
+function CouponDetail({ detail }) {
+  const results = detail.items || []
+  const summary = detail.store_info || {}
+  const eventCount = summary.event_coupons_downloaded || 0
+  const detailCount = summary.detail_coupons_downloaded || 0
+  const totalCount = eventCount + detailCount
+
+  return (
+    <>
+      <div style={{display:'flex',gap:24,marginBottom:16,fontSize:13,color:'var(--text-secondary)',flexWrap:'wrap'}}>
+        <span>이벤트 쿠폰: <strong>{eventCount}</strong>건</span>
+        <span>상품상세 쿠폰: <strong>{detailCount}</strong>건</span>
+        <span>합계: <strong>{totalCount}</strong>건</span>
+      </div>
+
+      {results.length > 0 && (
+        <div className="product-table-scroll">
+          <table className="price-table">
+            <thead>
+              <tr>
+                <th style={{width:30}}>#</th>
+                <th style={{width:80}}>유형</th>
+                <th>대상</th>
+                <th style={{width:80,textAlign:'center'}}>결과</th>
+                <th>메시지</th>
+              </tr>
+            </thead>
+            <tbody>
+              {results.map((r, i) => {
+                const success = r.status === 'success' || r.downloaded
+                return (
+                  <tr key={i}>
+                    <td style={{color:'var(--text-secondary)'}}>{i + 1}</td>
+                    <td>
+                      <span className={`badge ${r.type === 'event' ? 'promo' : 'dp'}`} style={{fontSize:11}}>
+                        {r.type === 'event' ? '이벤트' : '상품상세'}
+                      </span>
+                    </td>
+                    <td style={{maxWidth:250,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontSize:12}}>
+                      {r.url || r.product_code || '-'}
+                    </td>
+                    <td style={{textAlign:'center'}}>
+                      <span style={{color: success ? '#059669' : 'var(--danger)',fontWeight:600,fontSize:12}}>
+                        {success ? '성공' : '실패'}
+                      </span>
+                    </td>
+                    <td style={{fontSize:12,color:'var(--text-secondary)'}}>
+                      {r.message || r.error || '-'}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {results.length === 0 && (
+        <div className="empty-state">쿠폰 다운로드 결과가 없습니다</div>
       )}
     </>
   )

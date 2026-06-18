@@ -1507,6 +1507,43 @@ ProductAgent에서 PromotionAgent를 분리해야 함.
    - DirectoryDetail: 지점/위치/전화번호 조건부 컬럼 추가
    - 지점 수 통계 표시
 
+---
+
+### Phase 24. 로그 모니터링 페이지 (관리자 영역)
+
+> 에이전트별 크롤링 로그를 단계별로 파싱하여 실시간 모니터링 + 이력 조회
+
+**사용자 요청**: 관리자 영역에 로그 모니터링 전용 메뉴 추가. 에이전트별/단계별 로그 확인 기능.
+
+**핵심 설계**:
+- 서버사이드 로그 파싱: 기존 텍스트 로그의 패턴(`수집 시작:`, `탐지 결과:`, `[N/M]` 등)을 자동 감지하여 단계별 섹션으로 분리
+- 병합 규칙: 연속된 스크롤/더보기/진행 라인은 하나의 섹션으로 병합
+- 실시간 탭: 실행 중 크롤링 2초 폴링 자동갱신
+- 이력 탭: 좌측 파일 목록 + 우측 파싱된 로그 뷰어 (split panel)
+
+**작업 내역**:
+
+1. `web/backend/routes/logs.py` — **신규 생성**
+   - `GET /api/logs/files`: 로그 파일 목록 (사이트 메타데이터 조인, 에이전트 필터)
+   - `GET /api/logs/files/{filename}`: 파싱된 로그 내용 (단계별 섹션)
+   - `GET /api/logs/running`: 실행 중 크롤링 + 최근 10줄 미리보기
+   - `parse_log_sections()`: 11개 phase 패턴 감지 + 병합 규칙 적용
+
+2. `web/frontend/src/pages/LogMonitoring.jsx` — **신규 생성**
+   - `LogSectionViewer`: 접기/펼치기 섹션 뷰어 (phase 아이콘 + 에이전트 배지 + 줄 수)
+   - `LiveTab`: 실행 중 크롤링 카드 그리드 + 2초 자동갱신 로그 뷰어
+   - `HistoryTab`: split panel (파일 목록 + 섹션 뷰어)
+   - 에이전트 필터 드롭다운 + 텍스트 검색 (하이라이트)
+   - 모두 펼치기/모두 접기 버튼
+
+3. `web/backend/app.py` — logs 라우터 등록 + dotenv 로드 추가
+4. `web/frontend/src/App.jsx` — `/admin/logs` Route 추가
+5. `web/frontend/src/components/Layout.jsx` — adminNav에 로그 모니터링 메뉴 추가
+6. `web/frontend/src/App.css` — `.log-monitor-*`, `.log-section-*`, `.badge-*` 스타일 (~200줄)
+
+**수정된 파일**: `web/backend/app.py`, `web/frontend/src/App.jsx`, `web/frontend/src/components/Layout.jsx`, `web/frontend/src/App.css`
+**신규 파일**: `web/backend/routes/logs.py`, `web/frontend/src/pages/LogMonitoring.jsx`
+
 4. **DB 업데이트** (site_id=51)
    - 사이트명: 롯데면세점 랭킹 → 롯데면세점 브랜드지점
    - URL: rankingTrending/main → /kr/customer/brndBrch
@@ -1530,3 +1567,660 @@ ProductAgent에서 PromotionAgent를 분리해야 함.
 - `web/frontend/src/pages/CrawlResults.jsx` (DirectoryDetail 컬럼 확장)
 
 **검증**: CLI 실행 (`python main.py run --id 51`) → 17개 지점, 3,667개 브랜드 항목 수집 성공
+
+---
+
+### Phase 24. OrderAgent Headless 전환 + 쿠폰 다운로드 통합 + UI 플로우 시각화
+
+> 주문서 수집을 headless 모드로 전환하여 AWS 서버 배포 가능하도록 하고, 쿠폰 다운로드를 OrderAgent 내부에 통합
+
+**사용자 요청**: 
+- OrderAgent를 headless=True로 전환 (AWS 서버에 디스플레이 없음)
+- CouponAgent는 이벤트 URL 쿠폰 다운로드 전담 (단독 실행도 가능)
+- OrderAgent가 CouponAgent를 내부 호출하여 이벤트 쿠폰 다운로드 관리
+- 상품상세 쿠폰 + 주문서 쿠폰은 OrderAgent가 직접 처리
+- 로그인 1회, 같은 브라우저 세션으로 전체 플로우 원자적 실행
+- UI에서 전체 플로우 시각화
+
+**아키텍처 결정 근거**:
+- 쿠폰 미적용 결제금액 수집 방지 → 쿠폰+주문서 원자적 실행 필수
+- 로그인 1회로 봇 차단 위험 최소화
+- CouponAgent는 `run_event_coupons(page, event_coupons)` 메서드로 page 전달받아 종속 실행
+
+**수집 파이프라인**:
+```
+OrderAgent.run_site():
+  1. 브라우저 시작 (headless)
+  2. 메인+LPS 도메인 로그인 (1회)
+  3. CouponAgent.run_event_coupons() → 이벤트 URL 쿠폰 다운로드 (같은 page)
+  4. 상품코드별 반복:
+     a. 상품상세 이동
+     b. 상품상세 쿠폰 다운로드 (detail_coupon_selector)
+     c. 바로구매 클릭
+     d. 주문서 쿠폰 다운로드 (order_coupon_selector)
+     e. 출입국정보 확인
+     f. 결제정보 수집
+  5. 로그아웃 + 결과 저장
+```
+
+**작업 내역**:
+
+1. `agents/order/engine.py` — **OrderAgent headless 전환 + 쿠폰 통합**
+   - `headless=False` → `headless=True` 전환
+   - LPS 서브도메인 사전 로그인 (메인 로그인 후 lps 도메인 로그인)
+   - CouponAgent import + `run_event_coupons()` 내부 호출 (page 공유)
+   - 상품상세 쿠폰 다운로드 단계 추가 (`detail_coupon_selector`)
+   - 주문서 쿠폰 다운로드 단계 (`order_coupon_selector`)
+   - `JS_CLICK_COUPON` 공유 (CouponAgent에서 import)
+   - `_normalize_config()`: event_coupons, detail_coupon_selector, order_coupon_selector 추가
+   - `_JS_CLICK_ORDER_BUTTON`: img alt="바로구매" 매칭 추가
+   - 출입국정보 미등록 감지 + 성인인증 처리
+
+2. `agents/coupon/engine.py` — **CouponAgent (이벤트 쿠폰 전담)**
+   - BaseAgent 상속, `agent_type = "coupon"`
+   - `JS_CLICK_COUPON`: 텍스트 매칭 + CSS 셀렉터 지원 (public 상수)
+   - `run_event_coupons(page, event_coupons)`: OrderAgent가 호출하는 종속 메서드
+   - `run_site(site_id)`: 단독 실행 모드 (자체 로그인 + 이벤트 쿠폰)
+   - `_click_coupon(selector_text)`: 쿠폰 버튼 클릭 + 결과 반환
+   - 결과: `output/{site_id}_{name}/coupons.json`
+
+3. `agents/coupon/__init__.py` — 빈 패키지 파일
+
+4. `agents/__init__.py` — CouponAgent 등록
+   - `AGENT_REGISTRY`에 `"coupon": CouponAgent` 추가
+
+5. `web/frontend/src/pages/SiteSettings.jsx` — **UI 변경**
+   - CATEGORY_LABELS: `'쿠폰'` 카테고리 추가
+   - AGENT_BADGE_CLASS: `coupon: 'coupon-badge'` 추가
+   - ConfigModal: CouponConfig 분기 추가
+   - **CouponConfig 컴포넌트** (단독 실행용): 이벤트 쿠폰 URL/셀렉터 관리
+   - **OrderConfig 확장**:
+     - 통합 워크플로우: 로그인→이벤트쿠폰→상품상세→상세쿠폰→바로구매→주문서쿠폰→출입국→결제→로그아웃
+     - 이벤트 쿠폰 URL+셀렉터 리스트 관리 (추가/삭제) 🎁
+     - 상품상세 쿠폰 셀렉터 입력 🎫
+     - 주문서 쿠폰 셀렉터 입력 🏷️
+     - 쿠폰 단계는 노란 배경으로 시각 구분
+
+6. `web/frontend/src/pages/CrawlResults.jsx` — CouponDetail 컴포넌트 추가
+
+7. `web/frontend/src/App.css` — CSS 추가
+   - `.badge.coupon-badge`: 쿠폰 배지 (amber)
+   - `.order-workflow-node.coupon`: 쿠폰 단계 스타일 (노란 배경)
+   - `.order-workflow-coupon-tag`: 쿠폰 레이블 배지
+
+**수정된 파일**:
+- `agents/order/engine.py` (headless + CouponAgent 종속 호출 + 3단계 쿠폰)
+- `agents/coupon/engine.py` (이벤트 쿠폰 전담 + 종속/단독 실행 지원)
+- `agents/coupon/__init__.py` (신규)
+- `agents/__init__.py` (CouponAgent 등록)
+- `web/frontend/src/pages/SiteSettings.jsx` (CouponConfig + OrderConfig 쿠폰 통합)
+- `web/frontend/src/pages/CrawlResults.jsx` (CouponDetail 추가)
+- `web/frontend/src/App.css` (쿠폰 워크플로우 스타일)
+
+---
+
+### Phase 25. BannerAgent v2.1 수정 + OrderAgent 결제 필드 확장 (15종)
+
+> BannerAgent 배너 탐지 72개 멈춤 버그 수정 + OrderAgent 결제정보 수집 4→15 필드 확장
+
+**사용자 요청**:
+- 롯데면세점 배너 수집 시 72개 영역 탐지 후 멈추는 문제 해결
+- 주문서 결제정보를 브랜드, 정상가(달러/원화), 회원할인(달러/원화/사유), 혜택(달러/원화/사유), 할인율, 최종결제금액(달러/원화), 면세한도적용금액, 과세포인트, 적립 L.POINT 총 15종으로 확장
+- 결제정보 미수집 시 에러 메시지를 "출입국정보미등록"으로 통일
+
+**작업 내역**:
+
+1. `agents/banner/engine.py` — **BannerAgent v2.1 전면 수정**
+   - `_log()` 모듈 함수 → `self._log()` BaseAgent 메서드로 전환 (UI 로그 뷰어 표시)
+   - `MAX_DETECTED_AREAS = 20` 상수 추가 (과도한 영역 탐지 방지)
+   - `_JS_DETECT_BANNER_AREAS` 재작성: `addArea()` + `seenEls` Set으로 부모-자식 중복 제거
+   - 영역 정렬: 면적 기준 내림차순 → MAX_AREAS 슬라이싱 → top 위치 재정렬
+   - 과도하게 넓은 셀렉터 제거 (`[class*="slider"]`, `[class*="Slider"]`, `[class*="slick"]`, `[class*="swiper"]`)
+   - `_collect_banners()`: type_counts 요약 로그, 필터 결과 로그, 영역별 진행 로그 추가
+
+2. `agents/order/engine.py` — **결제정보 15종 수집 확장**
+   - `_JS_EXTRACT_ORDER_PAYMENT` 전면 재작성:
+     - Section 1: 브랜드(`div.brand`) + 상품명(`div.product`) 추출
+     - Section 2: `ul.totPaymentAmt1` — 정상가, 회원할인(사유 포함), 혜택(사유 포함)
+     - Section 3: `dl.expected_payment` → 최종결제금액 + 할인율; `.duty_free_limit` → 면세한도, 과세포인트, L.POINT
+     - Section 4: Fallback `.tit + .price` 패턴 매칭
+     - Section 5: 결제정보 미수집 시 debug raw_texts 출력
+   - `run_site()` 결과 처리: 15종 필드 전체 로깅 + 결과 dict 확장
+   - `_empty_result()` 정적 헬퍼: 4가지 에러 경로에서 일관된 빈 결과 구조 반환
+   - 결제정보 미수집 에러: "출입국정보미등록 - 출입국정보 등록 후 수집 가능"으로 통일
+
+3. `web/frontend/src/pages/CrawlResults.jsx` — **OrderDetail 테이블 확장**
+   - `orderRowFields()`: 5→17 필드 (brand, regular_price_usd/krw, member_discount_usd/krw/reason, benefit_usd/krw/reason, duty_free_limit, tax_point, l_point)
+   - OrderDetail `<thead>`/`<tbody>`: 6컬럼 → 18컬럼 테이블 렌더링
+   - 필드별 색상 구분: 회원할인=primary, 혜택=success, 할인율=danger
+
+4. `web/frontend/src/pages/SiteSettings.jsx` — **AddSiteModal 주문서 설정 통합**
+   - 카테고리 "주문서" 선택 시 전체 OrderConfig 필드 인라인 표시
+   - 이벤트 쿠폰 리스트, 상세/주문 쿠폰 셀렉터, 상품코드, URL, 로그인 셀렉터, 워크플로우 시각화
+
+**수정된 파일**:
+- `agents/banner/engine.py` (v2.1 — 로그 수정 + 탐지 제한 + 중복 제거)
+- `agents/order/engine.py` (결제정보 4→15 필드 + _empty_result + 에러 통일)
+- `web/frontend/src/pages/CrawlResults.jsx` (OrderDetail 18컬럼 테이블)
+- `web/frontend/src/pages/SiteSettings.jsx` (AddSiteModal 주문서 설정)
+
+---
+
+### Phase 26. 공통 로그 시스템 통일 — BaseAgent._log() 타임스탬프 포맷
+
+> 모든 에이전트 로그를 `[날짜 시간] [agent_type] 메시지` 공통 포맷으로 통일
+
+**사용자 요청**: Agent 실행 시 로그에 날짜/시간 정보 포함
+
+**아키텍처 결정**:
+- BaseAgent에 `_log()` 메서드를 정의하여 모든 에이전트가 상속받아 사용
+- 로그 포맷: `[2026-06-11 17:06:26] [product] 메시지`
+- UnicodeEncodeError 안전 처리 (Windows cp949 콘솔 대응)
+- BrowserManager는 BaseAgent를 상속하지 않으므로 별도 `_log()` 정적 메서드 추가
+
+**기존 3가지 로그 패턴 → 1가지로 통일**:
+
+| 기존 패턴 | 에이전트 | 변경 |
+|-----------|---------|------|
+| `self._log()` 자체 정의 | OrderAgent | 삭제 → BaseAgent 상속 |
+| 모듈 레벨 `_log()` 함수 | ProductAgent, DirectoryAgent | 삭제 → `self._log()` |
+| 직접 `print(f"[tag] ...")` | NewsAgent, CafeAgent, PromotionAgent, BaseAgent | `self._log()` 변환 |
+
+**작업 내역**:
+
+1. `core/base_agent.py` — **BaseAgent._log() 공통 로그 메서드 추가**
+   - `import sys, datetime` 추가
+   - `_log(self, msg)` 메서드: `[날짜시간] [agent_type] 메시지` 포맷 출력
+   - UnicodeEncodeError 시 `sys.stdout.buffer` fallback
+   - `run_all()` 내 `print()` → `self._log()` 변환
+   - `_safe_goto()`, `_is_blocked()`, `_is_soft_blocked()` 내 print → `self._log()` 변환
+   - `enable_proxy()`, `_rotate_proxy()` 등 프록시 관련 print → `self._log()` 변환
+   - `_do_login()` 내 print → `self._log()` 변환
+
+2. `core/browser.py` — **BrowserManager._log() 정적 메서드 추가**
+   - `import sys, datetime` 추가
+   - `_log(msg)` 정적 메서드: `[날짜시간] [browser] 메시지` 포맷
+   - 모든 `print(f"[browser] ...")` → `self._log(f"...")` 변환
+
+3. `agents/product/engine.py` — 모듈 레벨 `_log()` + `_TAG` 제거 → `self._log()` 전환
+4. `agents/directory/engine.py` — 모듈 레벨 `_log()` + `_TAG` 제거 → `self._log()` 전환
+5. `agents/order/engine.py` — 자체 `_log()` 메서드 + `_TAG` 제거 → BaseAgent 상속
+6. `agents/coupon/engine.py` — 미사용 `_TAG` 제거
+7. `agents/banner/engine.py` — 미사용 `_TAG` 확인 (이미 self._log 사용)
+8. `agents/news/engine.py` — 모든 `print(f"[news] ...")` → `self._log(f"...")` 변환
+9. `agents/cafe/engine.py` — 모든 `print(f"[cafe] ...")` → `self._log(f"...")` 변환
+10. `agents/promotion/engine.py` — 모든 `print(f"[promotion] ...")` → `self._log(f"...")` 변환
+
+**수정된 파일**:
+- `core/base_agent.py` (공통 _log 메서드 + 모든 print 변환)
+- `core/browser.py` (정적 _log 메서드 + 모든 print 변환)
+- `agents/product/engine.py` (모듈 _log 제거 → self._log)
+- `agents/directory/engine.py` (모듈 _log 제거 → self._log)
+- `agents/order/engine.py` (자체 _log 제거 → BaseAgent 상속)
+- `agents/coupon/engine.py` (_TAG 제거)
+- `agents/news/engine.py` (print → self._log)
+- `agents/cafe/engine.py` (print → self._log)
+- `agents/promotion/engine.py` (print → self._log)
+
+---
+
+### Phase 27. 크롤링 강제종료 상태(stopped) 관리
+
+> 크롤링 강제 종료 시 DB 상태를 running→stopped로 전환 + 서버 시작 시 잔여 running 정리
+
+**사용자 요청**: 크롤링 실행 후 강제 종료 시 수집 결과 상태가 running으로 남는 문제 해결
+
+**문제 원인**:
+- `create_result()` → status='running' INSERT
+- 정상 완료 시 `update_result(status='success')` 호출
+- 강제 종료(taskkill/kill) 시 → `update_result()` 호출 기회 없이 프로세스 종료 → running 영구 잔존
+
+**해결 방안**:
+1. `stopped` 상태 신규 추가 (강제종료 전용)
+2. 강제 종료 API에서 taskkill 후 해당 사이트의 running → stopped 전환
+3. 서버 시작 시 잔여 running 상태 일괄 stopped 정리
+
+**작업 내역**:
+
+1. `core/db.py` — **mark_running_as_stopped() 메서드 추가**
+   - `site_id` 지정 시: 해당 사이트의 running → stopped + "사용자에 의해 강제 종료됨"
+   - `site_id` 미지정 시: 전체 running → stopped + "서버 재시작으로 인한 강제 종료"
+   - 변경된 레코드 수 반환
+
+2. `web/backend/routes/sites.py` — **stop_crawl() API에서 DB 상태 업데이트**
+   - taskkill/kill 성공 후 `db.mark_running_as_stopped(site_id)` 호출
+   - try/except로 DB 오류가 중지 응답에 영향 주지 않도록 처리
+
+3. `web/backend/app.py` — **서버 시작 시 잔여 running 정리**
+   - `@app.on_event("startup")` 핸들러 추가
+   - 전체 running → stopped 일괄 전환
+   - 변경 건수 콘솔 출력
+
+4. `web/frontend/src/pages/CrawlResults.jsx` — **stopped 상태 UI 표시**
+   - `STATUS_CLASS`에 `stopped: 'stopped'` 추가
+   - `STATUS_LABEL` 매핑 추가 (success→성공, running→실행중, failed→실패, stopped→강제종료)
+   - 결과 테이블에서 한글 라벨 표시
+
+5. `web/frontend/src/App.css` — **stopped 뱃지 스타일**
+   - `.badge.stopped { background: #f1f5f9; color: #ea580c; }` (회색 배경 + 주황 텍스트)
+
+**상태 체계 (최종)**:
+
+| 상태 | 의미 | 뱃지 색상 |
+|------|------|----------|
+| `running` | 수집 실행 중 | 파랑 |
+| `success` | 수집 성공 | 초록 |
+| `failed` | 수집 실패 (에러) | 빨강 |
+| `stopped` | 강제 종료됨 | 주황 |
+
+**수정된 파일**:
+- `core/db.py` (mark_running_as_stopped 메서드)
+- `web/backend/routes/sites.py` (stop_crawl에서 DB 상태 변경)
+- `web/backend/app.py` (startup 이벤트에서 잔여 running 정리)
+- `web/frontend/src/pages/CrawlResults.jsx` (stopped 상태 + 한글 라벨)
+- `web/frontend/src/App.css` (stopped 뱃지 스타일)
+
+---
+
+### Phase 28. 주문서 수집항목 체크박스 선택 UI + Agent 필드 필터링
+
+> 주문서 결제정보 16종 필드를 체크박스로 개별 선택 가능하게 하고, Agent가 선택된 항목만 수집
+
+**사용자 요청**: 주문서 수집 Agent의 수집항목을 설정 UI에서 체크박스로 열거하여 사용자가 선택한 항목만 수집하도록 변경
+
+**작업 내역**:
+
+1. `web/frontend/src/pages/SiteSettings.jsx` — **수집항목 체크박스 UI**
+   - `ORDER_COLLECT_FIELDS` 상수: 16종 필드 정의 (key, label, group)
+     - 기본정보: 브랜드, 상품명
+     - 가격: 정상가(달러/원화)
+     - 할인: 회원할인(달러/원화/사유)
+     - 혜택: 혜택(달러/원화/사유)
+     - 결제: 결제금액(달러/원화), 할인율
+     - 부가: 면세한도적용금액, 과세포인트, 적립 L.POINT
+   - `ALL_ORDER_FIELD_KEYS`: 전체 필드 키 배열
+   - **ConfigModal OrderConfig**: `collect_fields` 상태 추가, 기존 단일 토글 → 16개 체크박스 그리드
+   - **AddSiteModal**: `orderConfig`에 `collect_fields` 추가, 동일한 체크박스 그리드
+   - 전체선택/전체해제 버튼 추가
+   - 기존 `field-checkbox-grid` CSS 클래스 재사용
+
+2. `agents/order/engine.py` — **collect_fields 기반 필드 필터링**
+   - `_normalize_config()`: `collect_fields` 기본값 `[]` (빈 배열 = 전체 수집)
+   - `_filter_fields()` 정적 메서드: 선택된 필드만 남기고 제거
+     - `product_code`, `product_name`, `detail_url`, `order_url`, `error`는 항상 유지
+   - `run_site()`: 결과 저장 직전에 `_filter_fields()` 적용
+
+**수정된 파일**:
+- `web/frontend/src/pages/SiteSettings.jsx` (OrderConfig + AddSiteModal 체크박스 UI)
+- `agents/order/engine.py` (_normalize_config + _filter_fields + run_site 필터 적용)
+
+### Phase 29. 수집 설정 매트릭스 대시보드
+
+> 전체 사이트의 수집항목 설정 현황을 에이전트별 매트릭스 테이블로 한눈에 확인
+
+**사용자 요청**: 카테고리, 사이트명, URL 기준으로 Agent, 수집항목들 나열, 수집주기, 설정일을 표현하고 수집항목에 포함될 경우 'O'로 마킹하는 매트릭스 대시보드 페이지 추가
+
+**작업 내역**:
+
+1. `web/frontend/src/pages/Matrix.jsx` — **매트릭스 대시보드 페이지 신규 생성**
+   - `AGENT_FIELD_DEFS`: 8개 에이전트별 수집 가능 필드 정의 (product 11, news 6, cafe 5, promotion 5, banner 6, directory 7, order 16, coupon 1)
+   - `isFieldCollected()`: 사이트 crawl_config에서 필드별 수집 여부 판정 (에이전트별 분기 로직)
+   - 요약 카드: 전체 사이트 수, 활성 사이트 수, 에이전트별 사이트 수
+   - 필터 바: 에이전트 / 카테고리 드롭다운 필터
+   - 에이전트별 섹션: 해당 에이전트 사이트들을 매트릭스 테이블로 표시
+   - 테이블 컬럼: #, 카테고리, 사이트명, URL, 수집주기, 설정일, 최근수집일, [에이전트별 수집필드들]
+   - 최근수집일: `/api/dashboard/stats`의 `site_status`에서 사이트별 마지막 crawl_date 표시
+   - 수집항목 포함 시 'O' 마킹 (파란색 하이라이트)
+   - 비활성 사이트 반투명 처리
+
+2. `web/frontend/src/App.jsx` — Matrix 라우트 추가 (`/matrix`)
+3. `web/frontend/src/components/Layout.jsx` — 사이드바 메뉴 추가 (`📋 대시보드-매트릭스`)
+4. `web/frontend/src/App.css` — 매트릭스 테이블 전용 CSS 스타일 추가
+   - `.matrix-summary`, `.matrix-filter-bar`, `.matrix-table`, `.matrix-collected` 등
+   - CSS Variables 사용 (하드코딩 색상 없음)
+
+**수정된 파일**:
+- `web/frontend/src/pages/Matrix.jsx` (신규)
+- `web/frontend/src/App.jsx` (라우트 추가)
+- `web/frontend/src/components/Layout.jsx` (메뉴 추가)
+- `web/frontend/src/App.css` (매트릭스 CSS 추가)
+
+### Phase 30. LLM 토큰 사용량 추적 인프라 구축
+
+> 에이전트에서 LLM API 사용 시 토큰 사용량/비용을 자동 추적하는 전체 구조
+
+**사용자 요청**: 향후 Agent에서 LLM 사용 시 유형별/항목별 토큰 사용량을 대시보드로 확인
+
+**작업 내역**:
+
+1. `CLAUDE.md` — LLM 사용 규칙 변경
+   - 기존 "LLM/AI API 호출 금지" → "LLM API 사용 허용 (비용 추적 필수)"
+   - `core/llm_client.py` 통해 호출 + 토큰/비용 DB 기록 필수
+
+2. `core/db.py` — `llm_usage` 테이블 + CRUD 메서드
+   - 테이블 컬럼: site_id, agent_type, task_type, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, input_preview, output_preview, elapsed_ms, created_at
+   - `add_llm_usage()`: 사용 이력 기록
+   - `get_llm_usage_summary()`: 전체 요약 (에이전트별, 작업유형별, 모델별, 일별 추이)
+   - `get_llm_usage_detail()`: 필터링 가능한 상세 이력 조회
+
+3. `core/llm_client.py` — **LLM 호출 클라이언트** (신규)
+   - `LLMClient` 클래스: agent_type, site_id, model 설정
+   - `ask()` 메서드: 프롬프트 전송 → 응답 + 토큰 사용량 반환 + DB 자동 기록
+   - `MODEL_PRICING`: 모델별 토큰 단가 (Claude Sonnet/Haiku/Opus, GPT-4o 등)
+   - `TASK_TYPES`: 작업 유형 상수 (8종: structure_detection, description_summary 등)
+   - Anthropic Messages API 기반 (API 키 없으면 RuntimeError)
+
+4. `web/backend/routes/llm.py` — API 라우트 (신규)
+   - `GET /api/llm/summary`: 전체 요약
+   - `GET /api/llm/detail`: 상세 이력 (agent_type, task_type, site_id 필터)
+
+5. `web/backend/app.py` — llm 라우터 등록
+
+6. `web/frontend/src/pages/LlmUsage.jsx` — **LLM 사용량 대시보드** (신규)
+   - 전체 현황 탭: 요약 카드 (호출수, 입력/출력/전체 토큰, 비용)
+   - 에이전트별/작업유형별 바 차트 + 상세 테이블
+   - 모델별 사용량, 일별 추이 차트
+   - 상세 이력 탭: 필터 + 호출별 상세 테이블 (일시, 에이전트, 작업유형, 모델, 토큰, 비용, 미리보기)
+   - 데이터 없을 때 사용 가이드 코드 표시
+
+7. `web/frontend/src/App.jsx` — `/admin/llm` 라우트 추가
+8. `web/frontend/src/components/Layout.jsx` — 관리자 메뉴 추가 (`🤖 LLM 토큰 사용량`)
+9. `web/frontend/src/App.css` — LLM 대시보드 전용 CSS
+
+**에이전트에서 사용 방법**:
+```python
+from core.llm_client import LLMClient
+
+llm = LLMClient(agent_type="product", site_id=5)
+result = llm.ask(
+    task_type="description_summary",
+    prompt="상품 설명을 요약해줘: ...",
+)
+# result["text"], result["tokens"], result["cost_usd"]
+```
+
+**수정된 파일**:
+- `CLAUDE.md` (LLM 사용 규칙 변경)
+- `core/db.py` (llm_usage 테이블 + CRUD)
+- `core/llm_client.py` (신규 — LLM 클라이언트)
+- `web/backend/routes/llm.py` (신규 — API)
+- `web/backend/app.py` (라우터 등록)
+- `web/frontend/src/pages/LlmUsage.jsx` (신규 — 대시보드)
+- `web/frontend/src/App.jsx` (라우트 추가)
+- `web/frontend/src/components/Layout.jsx` (메뉴 추가)
+- `web/frontend/src/App.css` (LLM CSS 추가)
+
+---
+
+### Phase 31. CouponAgent 이벤트 자동 탐색 + 쿠폰 키워드 관리
+
+> 이벤트 목록 페이지 자동 순회 + 키워드 기반 쿠폰 버튼 자동 탐색
+
+**사용자 요청**: 이벤트 페이지 URL을 수동 등록하는 대신, 이벤트 목록 페이지를 자동 순회하고 키워드로 쿠폰 버튼을 탐색/클릭
+
+**작업 내역**:
+
+1. `agents/coupon/engine.py` — CouponAgent 자동 탐색 기능 추가
+   - `JS_EXTRACT_EVENT_LINKS`: `#setEvtListDetail` 내 `a[data-value]` 링크에서 이벤트 URL 자동 수집
+   - `_discover_event_pages()`: 이벤트 목록 페이지 → 하위 이벤트 URL 목록 반환
+   - `run_auto_discovery_coupons()`: 자동 탐색 모드 — 이벤트 목록 순회 + 키워드로 쿠폰 클릭
+   - `_normalize_config()`: `event_list_url`, `coupon_keywords` 필드 추가
+   - `run_site()`: 수동(event_coupons) + 자동(event_list_url+coupon_keywords) 병행 지원
+
+2. `agents/order/engine.py` — OrderAgent에서 자동 탐색 쿠폰 호출 추가
+   - CouponAgent 호출 시 수동/자동 모드 분기
+   - `run_auto_discovery_coupons()` 호출 로직 추가
+
+3. `web/frontend/src/pages/SiteSettings.jsx` — UI 변경
+   - **CouponConfig**: `event_list_url` 입력 + `coupon_keywords` 멀티라인 텍스트 영역 추가
+   - **OrderConfig**: 동일하게 자동 탐색 섹션 추가
+   - **AddSiteModal**: 주문서 추가 시 자동 탐색 설정 포함
+   - 워크플로우 시각화에 "🔍 자동 탐색 쿠폰" 단계 추가
+   - 쿠폰 키워드: 엔터로 구분, 중복 제거, parsedKeywords로 저장
+
+4. `web/frontend/src/pages/Matrix.jsx` — 매트릭스 필드 추가
+   - coupon 에이전트: `auto_discovery`, `coupon_keywords` 필드 추가 (3개→3개)
+   - order 에이전트: `event_coupons`, `auto_discovery`, `coupon_keywords` 필드 추가 (16→19개)
+   - `isFieldCollected()`: 자동 탐색/키워드 설정 여부 판정 로직
+
+**config 구조 변경**:
+```json
+{
+  "event_coupons": [{"url": "...", "selector": "..."}],
+  "event_list_url": "https://kor.lottedfs.com/kr/event/eventDetail?evtDispNo=1044712",
+  "coupon_keywords": ["쿠폰 다운로드", "혜택받기", "쿠폰받기", "다운받기"]
+}
+```
+
+**수정된 파일**:
+- `agents/coupon/engine.py` (자동 탐색 로직)
+- `agents/order/engine.py` (자동 탐색 호출)
+- `web/frontend/src/pages/SiteSettings.jsx` (UI: CouponConfig, OrderConfig, AddSiteModal)
+- `web/frontend/src/pages/Matrix.jsx` (필드 정의 + 수집 판정)
+- `web/PROGRESS.md` (Phase 31 기록)
+
+---
+
+### Phase 32. 수집 필드 정의 DB 관리 + 기본/추가 필드 구분 제거
+
+> 에이전트별 수집 필드 정의를 하드코딩에서 DB 관리로 전환, 매트릭스와 설정 모달의 불일치 해소
+
+**사용자 요청**: 매트릭스에 표시되는 수집 필드가 실제 설정과 다르게 노출됨. 수집 항목을 하드코딩하지 말고 DB에서 관리. 기본필드/추가필드 구분 제거.
+
+**문제 원인**: 
+- Matrix.jsx의 `AGENT_FIELD_DEFS`가 하드코딩되어 실제 에이전트와 불일치
+- `isFieldCollected()`가 `collect_fields`만 확인하고 `optional_fields` 누락
+- SiteSettings.jsx에서 기본/추가 필드를 별도 배열로 관리하여 복잡도 증가
+
+**작업 내역**:
+
+1. `core/db.py` — **agent_field_defs 테이블 추가**
+   - 스키마: agent_type, field_key, label, config_key, sort_order, is_active
+   - `_seed_agent_field_defs()`: 8개 에이전트 × 66개 필드 초기 데이터 자동 삽입
+   - `get_agent_field_defs()`: 전체/에이전트별 필드 정의 조회
+   - `upsert_agent_field_def()`: 필드 추가/수정 (UPSERT)
+   - `delete_agent_field_def()`: 필드 비활성화
+
+2. `web/backend/routes/sites.py` — **API 추가**
+   - `GET /api/agent-fields`: 에이전트별 필드 정의 조회 (agent_type 그룹핑)
+   - `PUT /api/agent-fields/{agent_type}`: 필드 정의 수정
+
+3. `web/frontend/src/pages/Matrix.jsx` — **하드코딩 제거**
+   - `AGENT_FIELD_DEFS` 상수 제거 → `/api/agent-fields` API에서 로드
+   - `isFieldCollected()`: config_key 기반 범용 판정으로 재작성
+     - `collect_fields`: collect_fields + optional_fields 모두 확인
+     - `banner_areas`, `event_coupons` 등 개별 config_key 처리
+   - 에이전트 필터 목록도 API 응답 기반으로 동적 생성
+
+4. `web/frontend/src/pages/SiteSettings.jsx` — **필드 구분 제거 + DB 연동**
+   - `PRODUCT_FIELDS`, `DEFAULT_COLLECT_FIELDS` 상수 제거
+   - `DIR_FIELD_OPTIONS` 상수 제거
+   - `ORDER_COLLECT_FIELDS`, `ALL_ORDER_FIELD_KEYS` 상수 제거
+   - ProductConfig: `fieldDefs` props 사용, collect_fields + optional_fields → 단일 collect_fields 통합
+   - DirectoryConfig: `fieldDefs` props 사용
+   - OrderConfig: `fieldDefs` props 사용
+   - ConfigModal: `agentFieldDefs` props 전달
+   - AddSiteModal: `agentFieldDefs` props 전달
+   - CATEGORY_DEFAULT_CONFIGS: optional_fields → collect_fields로 병합
+   - COLLECT_ITEMS_BY_AGENT: group('basic'/'extra') 구분 제거
+   - buildCrawlConfig(): optional_fields 분리 제거, 단일 collect_fields
+
+**DB 스키마**:
+```sql
+CREATE TABLE agent_field_defs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_type   TEXT NOT NULL,
+    field_key    TEXT NOT NULL,
+    label        TEXT NOT NULL,
+    config_key   TEXT NOT NULL DEFAULT '',
+    sort_order   INTEGER NOT NULL DEFAULT 0,
+    is_active    INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(agent_type, field_key)
+)
+```
+
+**config_key 의미**: 해당 필드의 수집 여부를 결정하는 crawl_config 키
+- `collect_fields`: 배열에 포함 여부로 판정
+- `banner_areas`: 배열에 포함 여부로 판정
+- `detail_page`, `collect_body` 등: boolean 값으로 판정
+- `""` (빈 문자열): 항상 수집되는 필드
+
+**수정된 파일**:
+- `core/db.py` (agent_field_defs 테이블 + CRUD)
+- `web/backend/routes/sites.py` (agent-fields API)
+- `web/frontend/src/pages/Matrix.jsx` (전면 재작성)
+- `web/frontend/src/pages/SiteSettings.jsx` (하드코딩 제거 + DB 연동)
+- `web/PROGRESS.md` (Phase 32 기록)
+
+### Phase 33. 실패 모니터링 시스템 구축
+> 크롤링 실패 이벤트 구조화 저장 + 관리자 실패 모니터링 페이지
+
+**사용자 요청**: 크롤링 실행 시 발생하는 실패(HTTP 차단, 소프트 차단, 로그인 실패, 카드 클릭 실패, 주문서 도달 실패, 결제정보 없음 등)를 구조화하여 DB에 저장하고, 관리자 페이지에서 모니터링
+
+**설계 결정**:
+- A안 채택: 크롤 1회 = DB 1행, 개별 이벤트는 JSONB 배열 저장
+- 7종 실패 유형: http_block, soft_block, login_fail, click_fail, nav_fail, data_fail, exception
+- FailureCollector 패턴: 크롤 중 메모리 수집 → 종료 시 한 번에 DB 저장
+
+**작업 내역**:
+
+1. **DB 테이블 + 메서드** (`core/db.py`)
+   - `crawl_failure_log` 테이블 (JSONB: failure_summary, failure_events)
+   - 3개 인덱스 (site_id, crawl_date DESC, agent_type)
+   - insert_failure_log, get_failure_logs, get_failure_log_detail, get_failure_stats
+
+2. **FailureCollector 클래스** (`core/failure_collector.py` 신규)
+   - 크롤 1회 동안 실패 이벤트 메모리 수집
+   - add(), build_summary(), save() 메서드
+   - 실패 없으면 DB 저장 생략
+
+3. **BaseAgent 통합** (`core/base_agent.py`)
+   - `_failure_collector` 속성 + `_record_failure()` 헬퍼
+   - `_safe_goto()`: HTTP 429/503, HTTP 403, 소프트 차단 감지 시 자동 기록
+   - `_do_login()`: 로그인 페이지 차단, 폼 미발견, 성공 지표 미발견, 예외 시 기록
+
+4. **에이전트 8종 통합** (agents/*/engine.py)
+   - FailureCollector 초기화 (run_site 시작)
+   - except 블록에서 exception 유형 기록
+   - finally 블록에서 collector.save() 호출
+   - OrderAgent: 상품상세 차단, 주문서 미도달, 출입국정보 미등록, 결제정보 없음 기록
+
+5. **API 라우터** (`web/backend/routes/failures.py` 신규)
+   - GET /api/failures/stats (기간별 통계 요약)
+   - GET /api/failures (필터링 목록 조회)
+   - GET /api/failures/{id} (단건 상세)
+
+6. **관리자 페이지** (`web/frontend/src/pages/FailureMonitoring.jsx` 신규)
+   - StatCard 4종 (전체 실패, HTTP차단, 클릭/이동 실패, 데이터 실패)
+   - 필터 바 (에이전트, 기간, 사이트)
+   - 실패 목록 테이블 + 행 클릭 시 상세 펼침
+   - 이벤트 타임라인 (유형 아이콘/배지 + 메시지 + 컨텍스트)
+
+7. **라우팅/메뉴** (`App.jsx`, `Layout.jsx`)
+   - /admin/failures 라우트 추가
+   - 관리자 사이드바에 '⚠️ 실패 모니터링' 메뉴
+
+8. **스타일** (`App.css`)
+   - `.failure-monitor-*`, `.failure-stat-*`, `.failure-filter-*`, `.failure-table-*`, `.failure-event-*` 스타일 추가
+
+**수정된 파일**:
+- `core/failure_collector.py` (신규)
+- `core/db.py` (테이블 + 4개 메서드)
+- `core/base_agent.py` (_record_failure + _safe_goto/_do_login 통합)
+- `agents/product/engine.py`, `agents/news/engine.py`, `agents/cafe/engine.py`
+- `agents/promotion/engine.py`, `agents/banner/engine.py`, `agents/directory/engine.py`
+- `agents/order/engine.py`, `agents/coupon/engine.py`
+- `web/backend/routes/failures.py` (신규)
+- `web/backend/app.py` (라우터 등록)
+- `web/frontend/src/pages/FailureMonitoring.jsx` (신규)
+- `web/frontend/src/App.jsx` (라우트)
+- `web/frontend/src/components/Layout.jsx` (메뉴)
+- `web/frontend/src/App.css` (스타일)
+- `web/PROGRESS.md` (Phase 33 기록)
+
+### Phase 34. 로그 출력에 현재 IP 자동 노출
+> 모든 `_log()` 출력에 현재 사용 중인 IP(프록시/direct)를 자동 포함
+
+**사용자 요청**: 크롤링 로그에 현재 사용 중인 프록시 IP가 표시되지 않아, 봇 차단 시 어떤 IP로 접속했는지 파악 불가 → 모든 로그에 IP 노출
+
+**설계 결정**:
+- `_log()` 메서드가 모든 로그의 단일 출력점이므로, 여기에 `_proxy_ip` 자동 삽입
+- 로그 포맷 변경: `[timestamp] [agent_type] msg` → `[timestamp] [agent_type] [IP:address] msg`
+- 기존에 메시지 본문에 수동으로 `proxy=...`를 넣은 곳은 중복 제거
+
+**작업 내역**:
+
+1. **`_log()` 메서드 수정** (`core/base_agent.py`)
+   - `[IP:{proxy_ip}]` 태그를 모든 로그 라인에 자동 포함
+   - 프록시 사용 시: `[IP:http://123.45.67.89:8080]`
+   - 직접 연결 시: `[IP:direct]`
+
+2. **IP 중복 메시지 정리** (`core/base_agent.py`)
+   - `_safe_goto()`: HTTP 429/503, 403 메시지에서 `proxy=` 제거
+   - `_is_soft_blocked()`: 소프트 차단 감지 메시지에서 `proxy_info` 제거
+   - `_do_login()`: 로그인 차단 메시지에서 `proxy=` 제거
+
+3. **에이전트 6곳 IP 중복 제거**
+   - `agents/product/engine.py`: RuntimeError 메시지
+   - `agents/banner/engine.py`: RuntimeError 메시지
+   - `agents/directory/engine.py`: RuntimeError 메시지
+   - `agents/order/engine.py`: 로그인 차단 + 상품상세 차단 메시지
+   - `agents/coupon/engine.py`: 로그인 차단 메시지
+
+**로그 출력 예시**:
+```
+[2026-06-18 10:30:00] [order] [IP:http://123.45.67.89:8080] Stealth Chromium 브라우저 시작...
+[2026-06-18 10:30:05] [order] [IP:http://123.45.67.89:8080] 로그인 시도: user@example.com
+[2026-06-18 10:30:10] [order] [IP:http://123.45.67.89:8080] HTTP 403 @ lottedfs.com → 프록시 교체 시도
+[2026-06-18 10:30:11] [order] [IP:http://98.76.54.32:3128] 프록시 교체 완료
+[2026-06-18 10:30:15] [product] [IP:direct] 수집 시작: 사이트 #5
+```
+
+**수정된 파일**:
+- `core/base_agent.py` (_log 포맷 변경 + 6곳 중복 IP 제거)
+- `agents/product/engine.py` (중복 IP 제거)
+- `agents/banner/engine.py` (중복 IP 제거)
+- `agents/directory/engine.py` (중복 IP 제거)
+- `agents/order/engine.py` (중복 IP 제거 2곳)
+- `agents/coupon/engine.py` (중복 IP 제거)
+- `web/PROGRESS.md` (Phase 34 기록)
+
+---
+
+### Phase 35. 데이터 테이블 분리 — 모니터링 vs 수집 데이터
+> crawl_results(모니터링) + crawl_data(원시 데이터) 분리
+
+**사용자 요청**: 크롤링 수집 데이터를 Agent 상태/건수와 별도 테이블에 분리. 실제 수집 데이터는 향후 메달리온 아키텍처(Bronze/Silver/Gold)에 편입 예정.
+
+**설계**:
+- `crawl_results` → 모니터링 전용 (status, product_count, elapsed_sec, error_msg)
+- `crawl_data` (신규) → 수집 원시 데이터 (items JSONB, store_info JSONB) — 메달리온 Bronze 레이어
+
+**작업 내역**:
+1. **`core/db.py`** — 테이블 분리
+   - `crawl_data` 테이블 생성 (crawl_result_id FK, site_id, agent_type, items JSONB, store_info JSONB, item_count)
+   - `update_result()`: products가 있으면 `crawl_data`에 저장, `crawl_results`에는 상태/건수만 기록
+   - `get_crawl_data(result_id)`: crawl_data 조회 메서드 추가
+   - `get_latest_result()`: crawl_data JOIN으로 수집 데이터 포함 반환 (기존 데이터 fallback)
+
+2. **`web/backend/routes/results.py`** — 상세 조회 API 수정
+   - `get_result_detail()`: crawl_data에서 products 조회, 없으면 crawl_results fallback (기존 데이터 호환)
+   - `dashboard_stats()`, `list_results()`: 변경 없음 (product_count만 사용)
+
+3. **에이전트 코드**: 변경 없음 — `update_result()` 내부에서 자동 라우팅
+
+4. **기존 데이터 마이그레이션**
+   - `crawl_results.products/store_info` → `crawl_data.items/store_info`로 77건 이관
+   - `crawl_results`에서 `products`, `store_info` 컬럼 DROP
+
+5. **프론트엔드/백엔드 필드명 정리**
+   - API 응답: `products` → `items` 으로 변경 (crawl_data.items 컬럼과 일치)
+   - `CrawlResults.jsx`: 8개 상세 컴포넌트의 `detail.products` → `detail.items`
+   - `main.py`: CLI 결과 조회 `result["products"]` → `result["items"]`
+
+**수정된 파일**:
+- `core/db.py` (crawl_data 테이블 + update_result 분리 + get_crawl_data 추가 + products 컬럼 제거)
+- `web/backend/routes/results.py` (상세 조회 crawl_data JOIN, 응답 필드 items로 변경)
+- `web/frontend/src/pages/CrawlResults.jsx` (detail.products → detail.items, 8개 컴포넌트)
+- `main.py` (CLI 결과 조회 필드명 변경)
+- `web/PROGRESS.md` (Phase 35 기록)

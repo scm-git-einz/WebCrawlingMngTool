@@ -18,6 +18,12 @@ NPM = "npm"
 
 os.chdir(ROOT_DIR)
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(ROOT_DIR, ".env"))
+except ImportError:
+    pass
+
 
 def check_npm_installed():
     """node_modules 존재 여부 확인, 없으면 npm install"""
@@ -43,13 +49,15 @@ def main():
     check_npm_installed()
 
     # 2) FastAPI 백엔드 시작
-    print("[web] FastAPI 백엔드 시작 (port 8000)...")
+    server_host = os.getenv("SERVER_HOST", "0.0.0.0")
+    server_port = os.getenv("SERVER_PORT", "8000")
+    print(f"[web] FastAPI 백엔드 시작 ({server_host}:{server_port})...")
     backend = subprocess.Popen(
         [
             VENV_PYTHON, "-m", "uvicorn",
             "web.backend.app:app",
-            "--host", "0.0.0.0",
-            "--port", "8000",
+            "--host", server_host,
+            "--port", server_port,
             "--reload",
         ],
         cwd=ROOT_DIR,
@@ -64,10 +72,9 @@ def main():
     )
 
     time.sleep(3)
-    url = "http://localhost:5173"
+    url = "http://10.149.67.179:5173"
     print(f"\n[web] 브라우저에서 접속하세요: {url}")
     print("[web] 종료하려면 Ctrl+C를 누르세요.\n")
-    webbrowser.open(url)
 
     try:
         backend.wait()

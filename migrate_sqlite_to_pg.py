@@ -2,101 +2,144 @@
 import json
 import os
 import sqlite3
+import sys
 
+sys.path.insert(0, "D:\\crawling")
 import psycopg2
-from psycopg2.extras import RealDictCursor
-from dotenv import load_dotenv
+import psycopg2.extras
 
-load_dotenv()
-
-SQLITE_PATH = os.path.join(os.path.dirname(__file__), "data", "crawling.db")
-
-PG = {
-    "host": os.getenv("DB_HOST", "10.149.67.179"),
-    "port": int(os.getenv("DB_PORT", "5432")),
-    "dbname": os.getenv("DB_NAME", "aops"),
-    "user": os.getenv("DB_USER", "postgres"),
+SQLITE_PATH = "D:\\crawling\\data\\crawling.db"
+PG_CONFIG = {
+    "host": "localhost",
+    "port": 5432,
+    "dbname": "aops",
+    "user": "postgres",
     "password": os.getenv("DB_PASSWORD", ""),
+}
+
+# 마이그레이션 순서 (FK 의존성 고려)
+TABLES = [
+    "platforms",
+    "crawl_sites",
+    "extraction_templates",
+    "news_keywords",
+    "crawl_results",
+    "ocr_usage_log",
+    "llm_usage",
+    "site_credentials",
+]
+
+# JSONB 컬럼 목록 (TEXT → JSONB 변환 필요)
+JSONB_COLS = {
+    "platforms": ["detection", "browser"],
+    "crawl_sites": ["crawl_config"],
+    "extraction_templates": ["config"],
+    "crawl_results": ["store_info", "products"],
 }
 
 
 def migrate():
-    lite = sqlite3.connect(SQLITE_PATH)
-    lite.row_factory = sqlite3.Row
+    sqlite_conn = sqlite3.connect(SQLITE_PATH)
+    sqlite_conn.row_factory = sqlite3.Row
 
-    pg = psycopg2.connect(**PG)
-    cur = pg.cursor(cursor_factory=RealDictCursor)
+    pg_conn = psycopg2.connect(**PG_CONFIG)
+    pg_cur = pg_conn.cursor()
 
-    # ── crawl_sites ──────────────────────────────────────────────────
-    rows = lite.execute("SELECT * FROM crawl_sites ORDER BY id").fetchall()
-    print(f"crawl_sites: {len(rows)}건 이전 중...")
-    for r in rows:
-        cur.execute(
-            """
-            INSERT INTO crawl_sites
-                (id, site_name, site_url, is_active, platform_id, agent_type,
-                 crawl_config, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (id) DO UPDATE SET
-                site_name    = EXCLUDED.site_name,
-                site_url     = EXCLUDED.site_url,
-                is_active    = EXCLUDED.is_active,
-                platform_id  = EXCLUDED.platform_id,
-                agent_type   = EXCLUDED.agent_type,
-                crawl_config = EXCLUDED.crawl_config,
-                updated_at   = EXCLUDED.updated_at
-            """,
-            (
-                r["id"], r["site_name"], r["site_url"], r["is_active"],
-                r["platform_id"], r["agent_type"],
-                r["crawl_config"] or "{}",
-                r["created_at"], r["updated_at"],
-            ),
+    # agent_field_defs는 시드로 이미 생성되므로 제외 (truncate 후 재삽입)
+    print("기존 PG 테이블 데이터 삭제 (역순)...")
+    pg_cur.execute("DELETE FROM site_credentials")
+    pg_cur.execute("DELETE FROM llm_usage")
+    pg_cur.execute("DELETE FROM ocr_usage_log")
+    pg_cur.execute("DELETE FROM crawl_results")
+    pg_cur.execute("DELETE FROM news_keywords")
+    pg_cur.execute("DELETE FROM extraction_templates")
+    pg_cur.execute("DELETE FROM crawl_sites")
+    pg_cur.execute("DELETE FROM platforms")
+    pg_cur.execute("DELETE FROM agent_field_defs")
+    pg_conn.commit()
+
+    for table in TABLES:
+        sqlite_cur = sqlite_conn.cursor()
+        sqlite_cur.execute(f"SELECT * FROM {table}")
+        rows = sqlite_cur.fetchall()
+
+        if not rows:
+            print(f"  {table}: 0건 (스킵)")
+            continue
+
+        columns = [desc[0] for desc in sqlite_cur.description]
+        jsonb_cols = JSONB_COLS.get(table, [])
+
+        inserted = 0
+        for row in rows:
+            values = []
+            for i, col in enumerate(columns):
+                val = row[i]
+                if col in jsonb_cols and isinstance(val, str):
+                    try:
+                        json.loads(val)
+                        values.append(val)
+                    except (json.JSONDecodeError, TypeError):
+                        values.append("{}")
+                else:
+                    values.append(val)
+
+            placeholders = ", ".join(["%s"] * len(columns))
+            col_names = ", ".join(columns)
+
+            try:
+                pg_cur.execute(
+                    f"INSERT INTO {table} ({col_names}) VALUES ({placeholders})",
+                    values,
+                )
+                inserted += 1
+            except Exception as e:
+                pg_conn.rollback()
+                print(f"  {table} 행 삽입 오류: {e}")
+                print(f"    columns: {columns}")
+                print(f"    values: {values[:3]}...")
+                return
+
+        # SERIAL 시퀀스 갱신
+        pg_cur.execute(
+            f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), "
+            f"COALESCE((SELECT MAX(id) FROM {table}), 1))"
         )
-    # SERIAL 시퀀스를 현재 max id에 맞춤
-    cur.execute("SELECT setval('crawl_sites_id_seq', (SELECT MAX(id) FROM crawl_sites))")
 
-    # ── news_keywords ─────────────────────────────────────────────────
-    rows = lite.execute("SELECT * FROM news_keywords ORDER BY id").fetchall()
-    print(f"news_keywords: {len(rows)}건 이전 중...")
-    for r in rows:
-        cur.execute(
-            """
-            INSERT INTO news_keywords (id, site_id, keyword, is_active, created_at)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (id) DO NOTHING
-            """,
-            (r["id"], r["site_id"], r["keyword"], r["is_active"], r["created_at"]),
-        )
+        pg_conn.commit()
+        print(f"  {table}: {inserted}건 마이그레이션 완료")
+
+    # agent_field_defs도 마이그레이션
+    sqlite_cur = sqlite_conn.cursor()
+    sqlite_cur.execute("SELECT * FROM agent_field_defs")
+    rows = sqlite_cur.fetchall()
     if rows:
-        cur.execute("SELECT setval('news_keywords_id_seq', (SELECT MAX(id) FROM news_keywords))")
+        columns = [desc[0] for desc in sqlite_cur.description]
+        for row in rows:
+            values = list(row)
+            placeholders = ", ".join(["%s"] * len(columns))
+            col_names = ", ".join(columns)
+            try:
+                pg_cur.execute(
+                    f"INSERT INTO agent_field_defs ({col_names}) VALUES ({placeholders}) "
+                    f"ON CONFLICT (agent_type, field_key) DO NOTHING",
+                    values,
+                )
+            except Exception as e:
+                pg_conn.rollback()
+                print(f"  agent_field_defs 오류: {e}")
+                return
 
-    # ── crawl_results ─────────────────────────────────────────────────
-    rows = lite.execute("SELECT * FROM crawl_results ORDER BY id").fetchall()
-    print(f"crawl_results: {len(rows)}건 이전 중...")
-    for r in rows:
-        cur.execute(
-            """
-            INSERT INTO crawl_results
-                (id, site_id, crawl_date, status, store_info, products,
-                 product_count, error_msg, elapsed_sec)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (id) DO NOTHING
-            """,
-            (
-                r["id"], r["site_id"], r["crawl_date"], r["status"],
-                r["store_info"], r["products"], r["product_count"],
-                r["error_msg"], r["elapsed_sec"],
-            ),
+        pg_cur.execute(
+            "SELECT setval(pg_get_serial_sequence('agent_field_defs', 'id'), "
+            "COALESCE((SELECT MAX(id) FROM agent_field_defs), 1))"
         )
-    if rows:
-        cur.execute("SELECT setval('crawl_results_id_seq', (SELECT MAX(id) FROM crawl_results))")
+        pg_conn.commit()
+        print(f"  agent_field_defs: {len(rows)}건 마이그레이션 완료")
 
-    pg.commit()
-    print("마이그레이션 완료!")
-
-    lite.close()
-    pg.close()
+    sqlite_conn.close()
+    pg_conn.close()
+    print("\n마이그레이션 완료!")
 
 
 if __name__ == "__main__":

@@ -14,11 +14,12 @@
 │          agents/__init__.py                                     │
 │          AGENT_REGISTRY → get_agent(agent_type)                 │
 │                   │                                             │
-│   ┌───────┬───────┼───────┬──────────┬──────────┐               │
-│   ▼       ▼       ▼       ▼          ▼          ▼               │
-│ Product  News   Cafe   Promotion  Banner   Directory            │
-│ Agent    Agent  Agent  Agent      Agent    Agent                │
-│ (v2)                              (v2)     (v2)                │
+│   ┌───────┬───────┼───────┬──────────┬──────────┬────────┐       │
+│   ▼       ▼       ▼       ▼          ▼          ▼        ▼       │
+│ Product  News   Cafe   Promotion  Banner   Directory  Order    │
+│ Agent    Agent  Agent  Agent      Agent    Agent      Agent    │
+│ (v2)                              (v2)     (v2)      Coupon   │
+│                                                      Agent    │
 │   │       │       │       │          │          │               │
 │   └───────┴───────┼───────┴──────────┴──────────┘               │
 │                   ▼                                             │
@@ -44,6 +45,7 @@ AGENT_REGISTRY = {
     "banner":    BannerAgent,      # v2 — 배너/비주얼 캡처
     "directory": DirectoryAgent,   # v2 — 브랜드/이벤트 목록
     "order":     OrderAgent,       # 주문서 결제정보 수집
+    "coupon":    CouponAgent,      # 쿠폰 다운로드
 }
 
 def get_agent(agent_type: str, db=None):
@@ -1451,9 +1453,12 @@ v2 에이전트도 기존 공통 인프라를 그대로 활용:
 ### 16.1 개요
 
 면세점 주문서 페이지에서 결제 요약(정상가/할인/혜택/결제금액)과 장바구니 상품 정보를 수집한다.
-로그인 필수 → 주문서 페이지 접속 → 결제정보/상품 추출.
+**Headless 모드** (headless=True)로 실행되어 AWS 서버 등 디스플레이 없는 환경에서 운영 가능하다.
+로그인 필수 → 상품상세 → 바로구매 → 주문서 쿠폰(선택) → 출입국정보 확인 → 결제정보 추출.
 
 **별도 에이전트 근거**: 상품 목록 수집과 완전히 다른 패턴 — 로그인 필수, 주문서 고유 DOM 구조, 결제 요약 데이터.
+
+**CouponAgent와 협업**: CouponAgent가 먼저 실행되어 쿠키에 쿠폰 정보를 저장하면, OrderAgent가 동일 쿠키를 사용하여 할인 적용된 결제정보를 수집한다.
 
 ### 16.2 수집 파이프라인
 
@@ -1461,18 +1466,23 @@ v2 에이전트도 기존 공통 인프라를 그대로 활용:
 run_site(site_id)
   │
   ├── _normalize_config()
-  ├── 브라우저 시작
+  ├── 브라우저 시작 (headless=True)
   │
   ├── _get_next_credential()     계정 로테이션 (라운드로빈)
-  ├── _safe_goto(login_url)      로그인 페이지 이동
+  ├── _safe_goto(login_url)      메인 도메인 로그인
   ├── _do_login()                범용 로그인 (자동 폼 탐지)
+  ├── _safe_goto(lps_login_url)  LPS 서브도메인 로그인 (쿠키 공유)
+  ├── _do_login()                LPS 도메인 인증
   │
-  ├── _safe_goto(order_url)      주문서 페이지 이동 (도메인 다를 수 있음)
-  ├── _human_dwell + _human_scroll
-  │
-  ├── _JS_EXTRACT_ORDER_PAYMENT  결제정보 + 장바구니 추출
-  │     ├── 장바구니 상품: 상품명/수량/정상가/판매가/브랜드
-  │     └── 결제 요약: 정상가/회원할인/혜택/결제금액/면세한도/적립
+  ├── for product_code in product_codes:
+  │     ├── _safe_goto(product_detail_url)  상품상세 페이지 이동
+  │     ├── [성인인증 상품 감지 → 스킵]
+  │     ├── _JS_CLICK_ORDER_BUTTON         바로구매 클릭 (text/button/img 3단계)
+  │     ├── [order_coupon_selector 있으면]
+  │     │     └── _JS_CLICK_COUPON         주문서 내 쿠폰 다운로드
+  │     ├── [출입국정보 미등록 감지 → 스킵]
+  │     ├── _JS_EXTRACT_ORDER_PAYMENT      결제정보 + 장바구니 추출
+  │     └── page.go_back()                 다음 상품을 위해 복귀
   │
   └── _save_json()               order_payment.json + crawl_result.json
 ```
@@ -1481,10 +1491,13 @@ run_site(site_id)
 
 | 필드 | 기본값 | 설명 |
 |------|--------|------|
-| `login_url` | '' | 로그인 페이지 URL (비워두면 site_url) |
-| `order_url` | '' | 주문서 페이지 URL (비워두면 site_url) |
-| `collect_items` | true | 장바구니 상품 수집 여부 |
+| `login_url` | '' | 메인 로그인 페이지 URL (비워두면 site_url) |
+| `lps_login_url` | 'kor.lps.lottedfs.com/...' | LPS 서브도메인 로그인 URL |
+| `product_detail_url_template` | '...?prdNo={prdNo}...' | 상품상세 URL 템플릿 |
+| `order_url` | '' | 주문서 페이지 URL 패턴 |
+| `product_codes` | [] | 수집 대상 상품코드 목록 |
 | `collect_payment` | true | 결제 요약 수집 여부 |
+| `order_coupon_selector` | '' | 주문서 내 쿠폰 버튼 텍스트/CSS 셀렉터 |
 | `login_config` | {} | 로그인 폼 셀렉터 (비워두면 자동 탐지) |
 
 ### 16.4 결제정보 라벨 매핑
@@ -1513,7 +1526,79 @@ run_site(site_id)
 
 ---
 
-## 17. 관련 문서
+## 17. CouponAgent (agents/coupon/engine.py)
+
+### 17.1 개요
+
+이벤트 페이지 및 상품상세 페이지에서 쿠폰을 다운로드한다.
+OrderAgent 실행 전에 실행하여 쿠폰을 사전 확보하고, 쿠키를 공유하여 할인 적용된 결제정보 수집을 가능하게 한다.
+
+**별도 에이전트 근거**: 쿠폰 다운로드는 이벤트 페이지 + 상품 상세 2곳에서 진행되며, 주문서 수집과 독립적으로 실행 가능. 쿠키 공유로 로그인 1회만 수행.
+
+### 17.2 수집 파이프라인
+
+```
+run_site(site_id)
+  │
+  ├── _normalize_config()
+  ├── 브라우저 시작 (headless=True)
+  │
+  ├── _get_next_credential()     계정 로테이션
+  ├── _safe_goto(login_url)      메인 도메인 로그인
+  ├── _do_login()
+  ├── _safe_goto(lps_login_url)  LPS 서브도메인 로그인
+  ├── _do_login()
+  │
+  ├── for {url, selector} in event_coupons:
+  │     ├── _safe_goto(url)        이벤트 페이지 이동
+  │     └── _click_coupon(selector)  쿠폰 버튼 클릭
+  │
+  ├── for product_code in product_codes:
+  │     ├── _safe_goto(detail_url)     상품상세 이동
+  │     ├── [성인인증 감지 → 스킵]
+  │     └── _click_coupon(detail_coupon_selector)
+  │
+  ├── 쿠키 저장 (OrderAgent와 공유)
+  └── _save_json()               coupons.json + crawl_result.json
+```
+
+### 17.3 crawl_config 필드
+
+| 필드 | 기본값 | 설명 |
+|------|--------|------|
+| `login_url` | '' | 메인 로그인 URL |
+| `lps_login_url` | 'kor.lps.lottedfs.com/...' | LPS 서브도메인 로그인 URL |
+| `event_coupons` | [] | 이벤트 페이지 목록 [{url, selector}] |
+| `detail_coupon_selector` | '' | 상품상세 쿠폰 버튼 텍스트/CSS 셀렉터 |
+| `product_codes` | [] | 쿠폰 대상 상품코드 목록 |
+| `product_detail_url_template` | '...?prdNo={prdNo}...' | 상품상세 URL 템플릿 |
+| `login_config` | {} | 로그인 폼 셀렉터 |
+
+### 17.4 쿠폰 버튼 탐색 방식
+
+사용자가 등록한 텍스트 또는 CSS 셀렉터로 쿠폰 버튼을 찾아 클릭:
+- **CSS 셀렉터** (#, ., [ 시작): `document.querySelectorAll(sel)` → visible 요소 클릭
+- **텍스트 매칭** (그 외): button/a/[role=button]/[onclick] 중 텍스트 포함 요소 클릭
+
+### 17.5 CouponAgent → OrderAgent 실행 흐름
+
+```
+CouponAgent (site_id=N)          OrderAgent (site_id=M)
+  │                                │
+  ├── 로그인 (메인+lps)              │
+  ├── 이벤트 쿠폰 다운로드           │
+  ├── 상품상세 쿠폰 다운로드          │
+  ├── 쿠키 저장 ──────────────→ 쿠키 로드
+  │                                ├── 로그인 (쿠키 재사용)
+  │                                ├── 바로구매 클릭
+  │                                ├── 주문서 쿠폰 다운로드
+  │                                ├── 출입국 확인
+  │                                └── 결제정보 수집 (쿠폰 할인 반영)
+```
+
+---
+
+## 18. 관련 문서
 
 | 문서 | 경로 | 내용 |
 |------|------|------|

@@ -21,6 +21,7 @@ import random
 from urllib.parse import urlparse, urljoin
 
 from core.base_agent import BaseAgent, DEFAULT_SETTINGS
+from core.failure_collector import FailureCollector
 
 
 # ─── 프로모션 수집 기본 설정 ────────────────────────────────────
@@ -301,17 +302,18 @@ class PromotionAgent(BaseAgent):
         """특정 사이트의 이벤트 정보를 수집한다."""
         site = self.db.get_site(site_id)
         if not site:
-            print(f"[promotion] 사이트 ID={site_id} 를 찾을 수 없습니다")
+            self._log(f"사이트 ID={site_id} 를 찾을 수 없습니다")
             return
 
         result_id = self.db.create_result(site_id)
         start_time = time.time()
         raw_cfg = self.get_crawl_config(site)
         crawl_cfg = self._normalize_config(raw_cfg)
+        self._failure_collector = FailureCollector(site_id, result_id, self.agent_type)
 
-        print(f"[promotion] 이벤트 수집 시작: {site['site_name']}")
-        print(f"[promotion] URL: {site['site_url']}")
-        print(f"[promotion] 설정: max_events={crawl_cfg.get('max_events', 0)}, "
+        self._log(f"이벤트 수집 시작: {site['site_name']}")
+        self._log(f"URL: {site['site_url']}")
+        self._log(f"설정: max_events={crawl_cfg.get('max_events', 0)}, "
               f"collect_details={crawl_cfg.get('collect_details')}, "
               f"collect_event_products={crawl_cfg.get('collect_event_products')}")
 
@@ -331,16 +333,16 @@ class PromotionAgent(BaseAgent):
 
             self._save_json(site, store_info, events)
 
-            print(f"\n[promotion] 수집 완료: {site['site_name']}")
-            print(f"  사이트명: {store_info.get('store_name', 'N/A')}")
-            print(f"  이벤트 수: {len(events)}")
+            self._log(f"수집 완료: {site['site_name']}")
+            self._log(f"  사이트명: {store_info.get('store_name', 'N/A')}")
+            self._log(f"  이벤트 수: {len(events)}")
             detail_count = sum(1 for e in events if e.get("detail"))
             product_count = sum(len(e.get("products", [])) for e in events)
             if detail_count:
-                print(f"  상세 수집: {detail_count}건")
+                self._log(f"  상세 수집: {detail_count}건")
             if product_count:
-                print(f"  이벤트 내 상품: {product_count}건")
-            print(f"  소요 시간: {elapsed:.1f}초")
+                self._log(f"  이벤트 내 상품: {product_count}건")
+            self._log(f"  소요 시간: {elapsed:.1f}초")
 
         except Exception as e:
             elapsed = time.time() - start_time
@@ -350,9 +352,12 @@ class PromotionAgent(BaseAgent):
                 error_msg=str(e),
                 elapsed_sec=elapsed,
             )
-            print(f"[promotion] 수집 실패: {e}")
+            self._record_failure("exception", f"수집 실패: {e}")
+            self._log(f"수집 실패: {e}")
 
         finally:
+            if self._failure_collector:
+                self._failure_collector.save(self.db)
             self.browser_mgr.close()
             self.page = None
 
@@ -393,16 +398,16 @@ class PromotionAgent(BaseAgent):
         events = self._collect_event_list(site, crawl_cfg)
 
         if not events:
-            print("[promotion] 이벤트를 찾을 수 없습니다")
+            self._log("이벤트를 찾을 수 없습니다")
             return store_info, []
 
         # max_events 적용
         max_events = crawl_cfg.get("max_events", 0)
         if max_events > 0 and len(events) > max_events:
-            print(f"[promotion] {len(events)}개 이벤트 중 {max_events}개만 수집")
+            self._log(f"{len(events)}개 이벤트 중 {max_events}개만 수집")
             events = events[:max_events]
         else:
-            print(f"[promotion] {len(events)}개 이벤트 발견")
+            self._log(f"{len(events)}개 이벤트 발견")
 
         # 5. display_order 부여
         for i, event in enumerate(events):
@@ -456,7 +461,7 @@ class PromotionAgent(BaseAgent):
         범용 DOM 분석으로 이벤트 카드를 탐지한다.
         사이트 구조에 따라 여러 셀렉터를 시도한다.
         """
-        print("[promotion] 이벤트 목록 수집 중...")
+        self._log("이벤트 목록 수집 중...")
 
         # SPA 렌더링 대기
         self._trigger_client_render(self.page)
@@ -465,7 +470,7 @@ class PromotionAgent(BaseAgent):
         try:
             raw_events = self.page.evaluate(_JS_EXTRACT_EVENT_LIST)
         except Exception as e:
-            print(f"[promotion] JS 이벤트 추출 실패: {e}")
+            self._log(f"JS 이벤트 추출 실패: {e}")
             raw_events = []
 
         if not raw_events:
@@ -494,7 +499,7 @@ class PromotionAgent(BaseAgent):
                 e for e in raw_events
                 if self._is_event_active(e)
             ]
-            print(f"[promotion] 진행 중 이벤트 필터: {len(raw_events)}건")
+            self._log(f"진행 중 이벤트 필터: {len(raw_events)}건")
 
         return raw_events
 
@@ -662,7 +667,7 @@ class PromotionAgent(BaseAgent):
         collected = 0
         max_event_products = crawl_cfg.get("max_event_products", 20)
 
-        print(f"[promotion] 이벤트 상세 수집 시작 ({total}건)")
+        self._log(f"이벤트 상세 수집 시작 ({total}건)")
 
         for i, event in enumerate(events):
             event_url = event.get("event_url", "")
@@ -671,13 +676,13 @@ class PromotionAgent(BaseAgent):
 
             title_preview = event.get("title", "")[:40]
             safe_title = _safe_print(title_preview)
-            print(f"[promotion]   [{i+1}/{total}] {safe_title}")
+            self._log(f"  [{i+1}/{total}] {safe_title}")
 
             try:
                 # 이벤트 상세 페이지 접속
                 resp = self._safe_goto(event_url)
                 if self._is_blocked(resp):
-                    print(f"[promotion]     차단됨 → 스킵")
+                    self._log(f"    차단됨 → 스킵")
                     continue
 
                 self._human_dwell()
@@ -697,15 +702,15 @@ class PromotionAgent(BaseAgent):
                     products = self._collect_event_products(max_event_products)
                     if products:
                         event["products"] = products
-                        print(f"[promotion]     상품 {len(products)}건")
+                        self._log(f"    상품 {len(products)}건")
 
                 self._delay()
 
             except Exception as e:
-                print(f"[promotion]     상세 수집 실패: {e}")
+                self._log(f"    상세 수집 실패: {e}")
                 continue
 
-        print(f"[promotion] 이벤트 상세 수집 완료: {collected}/{total}건")
+        self._log(f"이벤트 상세 수집 완료: {collected}/{total}건")
 
     def _collect_event_products(
         self, max_products: int = 20,
@@ -818,7 +823,7 @@ class PromotionAgent(BaseAgent):
         ) as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
 
-        print(f"[promotion] 결과 저장: {out_dir}/")
+        self._log(f"결과 저장: {out_dir}/")
 
 
 # ═══════════════════════════════════════════════════════════════════

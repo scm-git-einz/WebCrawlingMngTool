@@ -12,8 +12,11 @@
 """
 import math
 import random
+import socket
+import sys
 import time
 from abc import ABC, abstractmethod
+from datetime import datetime
 from urllib.parse import urlparse
 
 from core.db import CrawlDB
@@ -83,9 +86,34 @@ class BaseAgent(ABC):
         self._proxy_fail_count: int = 0
         # 연속 프록시 실패 시 교체 임계값
         self._PROXY_ROTATE_THRESHOLD = 2
+        # 로컬 IP 감지 (클래스 레벨 캐시 — 최초 1회만)
+        if not BaseAgent._local_ip:
+            BaseAgent._local_ip = BaseAgent._detect_local_ip()
         # 소프트 차단 캐시 (중복 DOM 검사 방지)
         self._last_soft_block_url: str | None = None
         self._last_soft_block_result: bool = False
+        # 실패 이벤트 수집기 (각 에이전트의 run_site에서 초기화)
+        self._failure_collector = None
+
+    # ─── 로그 ────────────────────────────────────────────────────
+
+    def _log(self, msg: str):
+        """날짜/시간 + IP 포함 UnicodeEncodeError 안전 로그 출력."""
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ip = self._proxy_ip
+        line = f"[{ts}] [{self.agent_type}] [IP:{ip}] {msg}"
+        try:
+            print(line)
+        except UnicodeEncodeError:
+            sys.stdout.buffer.write((line + "\n").encode("utf-8", errors="replace"))
+            sys.stdout.buffer.flush()
+
+    # ─── 실패 이벤트 기록 ────────────────────────────────────────
+
+    def _record_failure(self, event_type: str, message: str, **kwargs):
+        """실패 이벤트를 FailureCollector에 기록한다."""
+        if self._failure_collector:
+            self._failure_collector.add(event_type, message, **kwargs)
 
     # ─── 에이전트 식별 ────────────────────────────────────────────
 
@@ -95,24 +123,45 @@ class BaseAgent(ABC):
         """에이전트 유형 식별자 (예: 'product', 'news')"""
         ...
 
+    @property
+    def _proxy_ip(self) -> str:
+        """현재 사용 중인 IP를 반환한다. 프록시면 프록시 주소, 아니면 로컬 IP."""
+        if self._current_proxy:
+            return self._current_proxy.get("server", "unknown")
+        return self._local_ip
+
+    @staticmethod
+    def _detect_local_ip() -> str:
+        """로컬 머신의 외부 통신용 IP를 감지한다."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "unknown"
+
+    _local_ip: str = ""
+
     # ─── 공개 메서드 ──────────────────────────────────────────────
 
     def run_all(self):
         """이 에이전트 타입에 해당하는 모든 활성 사이트를 수집한다."""
         sites = self.db.get_active_sites_by_agent(self.agent_type)
         if not sites:
-            print(f"[{self.agent_type}] 활성 사이트가 없습니다")
+            self._log("활성 사이트가 없습니다")
             return
 
-        print(f"[{self.agent_type}] {len(sites)}개 사이트 수집 시작")
+        self._log(f"{len(sites)}개 사이트 수집 시작")
         for i, site in enumerate(sites, 1):
-            print(f"\n{'='*60}")
-            print(f"  [{i}/{len(sites)}] {site['site_name']}")
-            print(f"  URL: {site['site_url']}")
-            print(f"{'='*60}")
+            self._log(f"{'='*60}")
+            self._log(f"  [{i}/{len(sites)}] {site['site_name']}")
+            self._log(f"  URL: {site['site_url']}")
+            self._log(f"{'='*60}")
             self.run_site(site["id"])
 
-        print(f"\n[{self.agent_type}] 전체 수집 완료")
+        self._log("전체 수집 완료")
 
     @abstractmethod
     def run_site(self, site_id: int):
@@ -146,20 +195,29 @@ class BaseAgent(ABC):
     # ═══════════════════════════════════════════════════════════════
 
     def enable_proxy(self, proxy_mgr: ProxyManager | None = None):
-        """프록시 로테이션을 활성화한다."""
+        """프록시 로테이션을 활성화하고 초기 프록시를 즉시 확보한다."""
         self._use_proxy = True
         self._proxy_mgr = proxy_mgr or get_proxy_manager()
         count = self._proxy_mgr.available_count
-        print(f"[{self.agent_type}] 프록시 로테이션 활성화 (사용 가능: {count}개)")
+        proxy = self._proxy_mgr.get_next()
+        if proxy:
+            self._current_proxy = proxy
+        self._log(f"프록시 로테이션 활성화 (사용 가능: {count}개)")
 
     def _get_initial_proxy(self) -> dict | None:
         """브라우저 시작용 초기 프록시를 반환한다."""
         if not self._use_proxy or not self._proxy_mgr:
+            self._log("프록시 미사용 (direct 연결)")
             return None
+        if self._current_proxy:
+            self._log(f"초기 프록시 설정: {self._current_proxy['server']}")
+            return self._current_proxy
         proxy = self._proxy_mgr.get_next()
         if proxy:
             self._current_proxy = proxy
-            print(f"[{self.agent_type}] 초기 프록시: {proxy['server']}")
+            self._log(f"초기 프록시 설정: {proxy['server']}")
+        else:
+            self._log("사용 가능한 프록시 없음 — direct 연결")
         return proxy
 
     def _rotate_proxy(self) -> bool:
@@ -174,7 +232,7 @@ class BaseAgent(ABC):
         old_server = self._current_proxy.get("server") if self._current_proxy else None
         new_proxy = self._proxy_mgr.rotate_on_block(old_server)
         if not new_proxy:
-            print(f"[{self.agent_type}] 사용 가능한 프록시가 없습니다")
+            self._log("사용 가능한 프록시가 없습니다")
             return False
 
         self._current_proxy = new_proxy
@@ -182,10 +240,10 @@ class BaseAgent(ABC):
 
         try:
             self.page = self.browser_mgr.recreate_context(proxy=new_proxy)
-            print(f"[{self.agent_type}] 프록시 교체 완료: {new_proxy['server']}")
+            self._log(f"프록시 교체 완료: {new_proxy['server']}")
             return True
         except Exception as e:
-            print(f"[{self.agent_type}] 프록시 교체 실패: {e}")
+            self._log(f"프록시 교체 실패: {e}")
             return False
 
     def _create_page(self, cookie_domain: str | None = None, headless: bool = True, **kwargs) -> "Page":
@@ -255,8 +313,8 @@ class BaseAgent(ABC):
                     if self._use_proxy:
                         self._proxy_fail_count += 1
                         if self._proxy_fail_count >= self._PROXY_ROTATE_THRESHOLD:
-                            print(
-                                f"[{self.agent_type}] HTTP {resp.status} @ "
+                            self._log(
+                                f"HTTP {resp.status} @ "
                                 f"{domain} → 프록시 교체 시도"
                             )
                             if self._rotate_proxy():
@@ -266,19 +324,35 @@ class BaseAgent(ABC):
                     wait_secs = self._calc_backoff_wait(
                         domain, attempt,
                     )
-                    print(
-                        f"[{self.agent_type}] HTTP {resp.status} @ "
+                    self._log(
+                        f"HTTP {resp.status} @ "
                         f"{domain} → {wait_secs:.0f}초 대기 "
                         f"({attempt + 1}/{max_retries})"
+                    )
+                    self._record_failure(
+                        "http_block",
+                        f"HTTP {resp.status} @ {domain}",
+                        subtype=str(resp.status),
+                        domain=domain,
+                        url=url,
+                        context={"attempt": attempt + 1, "wait_secs": round(wait_secs), "proxy": self._proxy_ip},
                     )
                     time.sleep(wait_secs)
                     continue
 
                 # 403 차단 시 프록시 교체 시도
                 if resp and resp.status == 403 and self._use_proxy:
-                    print(
-                        f"[{self.agent_type}] HTTP 403 @ "
+                    self._log(
+                        f"HTTP 403 @ "
                         f"{domain} → 프록시 교체 시도"
+                    )
+                    self._record_failure(
+                        "http_block",
+                        f"HTTP 403 @ {domain}",
+                        subtype="403",
+                        domain=domain,
+                        url=url,
+                        context={"proxy": self._proxy_ip},
                     )
                     if self._rotate_proxy():
                         continue
@@ -291,9 +365,16 @@ class BaseAgent(ABC):
                     self._last_soft_block_result = soft_blocked
 
                     if soft_blocked:
+                        self._record_failure(
+                            "soft_block",
+                            f"소프트 차단 감지 @ {domain}",
+                            domain=domain,
+                            url=url,
+                            context={"proxy": self._proxy_ip},
+                        )
                         if self._use_proxy:
-                            print(
-                                f"[{self.agent_type}] HTTP 200 소프트 차단 @ "
+                            self._log(
+                                f"HTTP 200 소프트 차단 @ "
                                 f"{domain} → 프록시 교체 시도"
                             )
                             if self._rotate_proxy():
@@ -315,8 +396,8 @@ class BaseAgent(ABC):
             except Exception as e:
                 if attempt < max_retries - 1:
                     wait_secs = (attempt + 1) * 15
-                    print(
-                        f"[{self.agent_type}] 페이지 로딩 오류: {e} → "
+                    self._log(
+                        f"페이지 로딩 오류: {e} → "
                         f"{wait_secs}초 대기 후 재시도"
                     )
                     try:
@@ -372,8 +453,8 @@ class BaseAgent(ABC):
         if consecutive > 0 and elapsed < 300:
             # 최근 5분 이내에 429를 받은 적 있음
             cooldown = min(30 + consecutive * 15, 120)
-            print(
-                f"[{self.agent_type}] {domain}: 최근 429 이력 → "
+            self._log(
+                f"{domain}: 최근 429 이력 → "
                 f"{cooldown}초 쿨다운"
             )
             time.sleep(cooldown)
@@ -521,8 +602,8 @@ class BaseAgent(ABC):
 
             if result and result.get("blocked"):
                 reason = result.get("reason", "unknown")
-                print(
-                    f"[{self.agent_type}] 소프트 차단 감지: {reason} "
+                self._log(
+                    f"소프트 차단 감지: {reason} "
                     f"(text={result.get('textLen', 0)}자, "
                     f"img={result.get('images', 0)}개)"
                 )
@@ -532,7 +613,7 @@ class BaseAgent(ABC):
 
         except Exception as e:
             # evaluate 실패 자체가 비정상 → 차단일 가능성
-            print(f"[{self.agent_type}] 소프트 차단 검사 실패: {e}")
+            self._log(f"소프트 차단 검사 실패: {e}")
             return False
 
     # ═══════════════════════════════════════════════════════════════
@@ -705,8 +786,8 @@ class BaseAgent(ABC):
             # _safe_goto에서 프록시 교체 실패한 소프트 차단 잔여 확인
             if self._is_blocked(resp):
                 if _retry_count < _MAX_SOFT_BLOCK_RETRIES and self._use_proxy:
-                    print(
-                        f"[{self.agent_type}] 로그인 페이지 차단 → "
+                    self._log(
+                        f"로그인 페이지 차단 → "
                         f"프록시 교체 후 재시도 ({_retry_count + 1}/{_MAX_SOFT_BLOCK_RETRIES})"
                     )
                     if self._rotate_proxy():
@@ -716,7 +797,14 @@ class BaseAgent(ABC):
                             _retry_count=_retry_count + 1,
                         )
                 status = resp.status if resp else "N/A"
-                print(f"[{self.agent_type}] 로그인 페이지 차단됨 (HTTP {status})")
+                self._log(f"로그인 페이지 차단됨 (HTTP {status})")
+                self._record_failure(
+                    "login_fail",
+                    f"로그인 페이지 차단 (HTTP {status})",
+                    subtype="page_blocked",
+                    url=login_url,
+                    context={"retry_count": _retry_count, "proxy": self._proxy_ip},
+                )
                 return False
 
         id_sel = cfg.get("id_selector", "")
@@ -769,8 +857,8 @@ class BaseAgent(ABC):
         if not id_sel or not pwd_sel:
             # 로그인 폼을 못 찾으면 소프트 차단일 가능성 → 프록시 교체 후 재시도
             if self._use_proxy and _retry_count < _MAX_SOFT_BLOCK_RETRIES:
-                print(
-                    f"[{self.agent_type}] 로그인 폼 미발견 (소프트 차단 추정) → "
+                self._log(
+                    f"로그인 폼 미발견 (소프트 차단 추정) → "
                     f"프록시 교체 후 재시도 ({_retry_count + 1}/{_MAX_SOFT_BLOCK_RETRIES})"
                 )
                 if self._rotate_proxy():
@@ -779,7 +867,14 @@ class BaseAgent(ABC):
                         page, credential, login_config,
                         _retry_count=_retry_count + 1,
                     )
-            print(f"[{self.agent_type}] 로그인 폼을 찾을 수 없습니다")
+            self._log("로그인 폼을 찾을 수 없습니다")
+            self._record_failure(
+                "login_fail",
+                "로그인 폼 미발견",
+                subtype="form_not_found",
+                url=login_url or page.url,
+                context={"retry_count": _retry_count},
+            )
             return False
 
         try:
@@ -799,16 +894,30 @@ class BaseAgent(ABC):
             if success_sel:
                 try:
                     page.wait_for_selector(success_sel, timeout=5000)
-                    print(f"[{self.agent_type}] 로그인 성공: {credential['login_id']}")
+                    self._log(f"로그인 성공: {credential['login_id']}")
                     return True
                 except Exception:
-                    print(f"[{self.agent_type}] 로그인 확인 실패: 성공 지표 미발견")
+                    self._log("로그인 확인 실패: 성공 지표 미발견")
+                    self._record_failure(
+                        "login_fail",
+                        f"로그인 확인 실패: 성공 지표 미발견",
+                        subtype="success_indicator_missing",
+                        url=page.url,
+                        context={"login_id": credential["login_id"], "success_indicator": success_sel},
+                    )
                     return False
 
-            print(f"[{self.agent_type}] 로그인 시도 완료: {credential['login_id']}")
+            self._log(f"로그인 시도 완료: {credential['login_id']}")
             return True
         except Exception as e:
-            print(f"[{self.agent_type}] 로그인 실패: {e}")
+            self._log(f"로그인 실패: {e}")
+            self._record_failure(
+                "login_fail",
+                f"로그인 실패: {e}",
+                subtype="exception",
+                url=page.url if page else "",
+                context={"login_id": credential.get("login_id", "")},
+            )
             return False
 
 

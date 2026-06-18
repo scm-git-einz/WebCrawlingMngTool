@@ -333,8 +333,8 @@ def cmd_result(args):
         for k, v in store.items():
             print(f"    {k}: {str(v)[:60]}")
 
-    if result.get("products"):
-        items = result["products"]
+    if result.get("items"):
+        items = result["items"]
         if agent_type == "news":
             print(f"\n  [기사 목록 - 상위 5개]")
             for a in items[:5]:

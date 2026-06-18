@@ -28,6 +28,7 @@ from urllib.parse import urlparse, urljoin, quote
 from playwright.sync_api import Page
 
 from core.base_agent import BaseAgent, DEFAULT_SETTINGS
+from core.failure_collector import FailureCollector
 from core.network_interceptor import NetworkInterceptor
 from core.strategies import get_strategy
 
@@ -321,13 +322,14 @@ class NewsAgent(BaseAgent):
         """
         site = self.db.get_site(site_id)
         if not site:
-            print(f"[news] 사이트 ID={site_id} 를 찾을 수 없습니다")
+            self._log(f"사이트 ID={site_id} 를 찾을 수 없습니다")
             return
 
         result_id = self.db.create_result(site_id)
         start_time = time.time()
         raw_cfg = self.get_crawl_config(site)
         crawl_cfg = self._normalize_config(raw_cfg)
+        self._failure_collector = FailureCollector(site_id, result_id, self.agent_type)
 
         try:
             # 쿠키 영속화
@@ -360,9 +362,9 @@ class NewsAgent(BaseAgent):
 
             self._save_json(site, articles)
 
-            print(f"\n[news] 수집 완료: {site['site_name']}")
-            print(f"  기사 수: {len(articles)}")
-            print(f"  소요 시간: {elapsed:.1f}초")
+            self._log(f"수집 완료: {site['site_name']}")
+            self._log(f"  기사 수: {len(articles)}")
+            self._log(f"  소요 시간: {elapsed:.1f}초")
 
         except Exception as e:
             elapsed = time.time() - start_time
@@ -372,9 +374,12 @@ class NewsAgent(BaseAgent):
                 error_msg=str(e),
                 elapsed_sec=elapsed,
             )
-            print(f"[news] 수집 실패: {e}")
+            self._record_failure("exception", f"수집 실패: {e}")
+            self._log(f"수집 실패: {e}")
 
         finally:
+            if self._failure_collector:
+                self._failure_collector.save(self.db)
             self.browser_mgr.close()
             self.page = None
 
@@ -400,24 +405,24 @@ class NewsAgent(BaseAgent):
         """
         # 1순위: CLI override
         if override_keywords:
-            print(f"[news] 키워드 소스: CLI override ({len(override_keywords)}개)")
+            self._log(f"키워드 소스: CLI override ({len(override_keywords)}개)")
             return override_keywords
 
         # 2순위: DB 활성 키워드
         # (최초 실행 시 crawl_config 에서 자동 마이그레이션)
         migrated = self.db.migrate_keywords_from_config(site_id)
         if migrated > 0:
-            print(f"[news] crawl_config → DB 키워드 마이그레이션: {migrated}개")
+            self._log(f"crawl_config → DB 키워드 마이그레이션: {migrated}개")
 
         db_keywords = self.db.get_active_keywords(site_id)
         if db_keywords:
-            print(f"[news] 키워드 소스: DB ({len(db_keywords)}개)")
+            self._log(f"키워드 소스: DB ({len(db_keywords)}개)")
             return db_keywords
 
         # 3순위: crawl_config fallback
         config_keywords = crawl_cfg.get("search_keywords", [])
         if config_keywords:
-            print(f"[news] 키워드 소스: crawl_config ({len(config_keywords)}개)")
+            self._log(f"키워드 소스: crawl_config ({len(config_keywords)}개)")
         return config_keywords
 
     # ═══════════════════════════════════════════════════════════════
@@ -429,7 +434,7 @@ class NewsAgent(BaseAgent):
         search_keywords: list[str],
     ) -> list[dict]:
         """키워드별로 뉴스 검색 결과를 수집한다."""
-        print("\n[news] ── 키워드 검색 모드 ──")
+        self._log("── 키워드 검색 모드 ──")
 
         max_per_kw = crawl_cfg.get(
             "max_articles_per_keyword",
@@ -452,7 +457,7 @@ class NewsAgent(BaseAgent):
 
         for kw_idx, keyword in enumerate(search_keywords, 1):
             safe_kw = _safe_print(keyword)
-            print(f"\n[news] [{kw_idx}/{len(search_keywords)}] "
+            self._log(f"[{kw_idx}/{len(search_keywords)}] "
                   f"키워드: '{safe_kw}'")
 
             # 검색 URL 생성
@@ -464,7 +469,7 @@ class NewsAgent(BaseAgent):
                 search_url, wait_until="domcontentloaded",
             )
             if self._is_blocked(resp):
-                print(f"[news]   검색 차단됨 → 스킵")
+                self._log(f"  검색 차단됨 → 스킵")
                 self._delay()
                 continue
 
@@ -478,7 +483,7 @@ class NewsAgent(BaseAgent):
                     _JS_NAVER_NEWS_SEARCH_EXTRACT,
                 )
             except Exception as e:
-                print(f"[news]   추출 실패: {e}")
+                self._log(f"  추출 실패: {e}")
                 self._delay()
                 continue
 
@@ -509,11 +514,11 @@ class NewsAgent(BaseAgent):
                 })
                 kw_count += 1
 
-            print(f"[news]   {kw_count}개 기사 수집 "
+            self._log(f"  {kw_count}개 기사 수집 "
                   f"(총 {len(all_articles)}개)")
 
             if len(all_articles) >= max_total:
-                print(f"[news] max_articles={max_total} 도달 → 중단")
+                self._log(f"max_articles={max_total} 도달 → 중단")
                 break
 
             # 키워드 간 인간형 딜레이
@@ -532,7 +537,7 @@ class NewsAgent(BaseAgent):
             all_articles = self._filter_by_keywords(
                 all_articles, post_keywords,
             )
-            print(f"[news] 키워드 필터 적용 후: {len(all_articles)}개")
+            self._log(f"키워드 필터 적용 후: {len(all_articles)}개")
 
         return all_articles
 
@@ -544,7 +549,7 @@ class NewsAgent(BaseAgent):
         self, site: dict, crawl_cfg: dict,
     ) -> list[dict]:
         """단일 뉴스 사이트 페이지에서 기사를 수집한다."""
-        print(f"\n[news] 사이트 접속: {site['site_url']}")
+        self._log(f"사이트 접속: {site['site_url']}")
         resp = self._safe_goto(
             site["site_url"], wait_until="domcontentloaded",
         )
@@ -562,7 +567,7 @@ class NewsAgent(BaseAgent):
         keywords = crawl_cfg.get("keywords", [])
         if keywords:
             articles = self._filter_by_keywords(articles, keywords)
-            print(f"[news] 키워드 필터 적용 후: {len(articles)}개")
+            self._log(f"키워드 필터 적용 후: {len(articles)}개")
 
         # 본문 수집
         if crawl_cfg.get("collect_body", True) and articles:
@@ -580,7 +585,7 @@ class NewsAgent(BaseAgent):
         self, site: dict, crawl_cfg: dict,
     ) -> list[dict]:
         """현재 페이지에서 기사 목록을 추출한다."""
-        print("\n[news] ── 기사 목록 수집 ──")
+        self._log("── 기사 목록 수집 ──")
 
         max_articles = crawl_cfg.get(
             "max_articles",
@@ -601,7 +606,7 @@ class NewsAgent(BaseAgent):
                         break
 
                 if article_tmpl:
-                    print("[news] 기존 article_list 템플릿 사용")
+                    self._log("기존 article_list 템플릿 사용")
                     strategy = get_strategy(article_tmpl["strategy"])
                     raw = strategy.extract(
                         self.page, article_tmpl["config"],
@@ -611,16 +616,16 @@ class NewsAgent(BaseAgent):
                         return items[:max_articles]
 
         # 자동 분석: DOM에서 기사 링크 탐지
-        print("[news] DOM 자동 분석으로 기사 탐지")
+        self._log("DOM 자동 분석으로 기사 탐지")
         try:
             scan_result = self.page.evaluate(_JS_NEWS_ARTICLE_SCAN)
         except Exception as e:
-            print(f"[news] DOM 스캔 실패: {e}")
+            self._log(f"DOM 스캔 실패: {e}")
             return []
 
         total = scan_result.get("totalFound", 0)
         raw_articles = scan_result.get("articles", [])
-        print(f"[news] {total}개 기사 링크 탐지됨")
+        self._log(f"{total}개 기사 링크 탐지됨")
 
         articles = []
         for i, item in enumerate(raw_articles[:max_articles]):
@@ -647,7 +652,7 @@ class NewsAgent(BaseAgent):
             "max_body_articles", len(articles),
         )
         targets = articles[:max_body_articles]
-        print(f"\n[news] ── 기사 본문 수집 ({len(targets)}개) ──")
+        self._log(f"── 기사 본문 수집 ({len(targets)}개) ──")
 
         max_body_len = DEFAULT_NEWS_SETTINGS["max_body_length"]
 
@@ -663,12 +668,12 @@ class NewsAgent(BaseAgent):
 
             title_preview = article.get("title", "N/A")[:40]
             safe_title = _safe_print(title_preview)
-            print(f"[news] [{i}/{len(targets)}] {safe_title}...")
+            self._log(f"[{i}/{len(targets)}] {safe_title}...")
 
             try:
                 resp = self._safe_goto(url)
                 if self._is_blocked(resp):
-                    print("[news]   차단됨 → 스킵")
+                    self._log("  차단됨 → 스킵")
                     continue
 
                 # 인간형 체류
@@ -690,16 +695,16 @@ class NewsAgent(BaseAgent):
                     if detail.get("date") and not article.get("date"):
                         article["date"] = detail["date"]
                 else:
-                    print("[news]   본문 추출 실패")
+                    self._log("  본문 추출 실패")
 
             except Exception as e:
-                print(f"[news]   오류: {e}")
+                self._log(f"  오류: {e}")
 
             if i < len(targets):
                 self._delay()
 
         body_count = sum(1 for a in targets if a.get("body"))
-        print(f"[news] 본문 수집 완료: "
+        self._log(f"본문 수집 완료: "
               f"{body_count}/{len(targets)}개 성공")
         return articles
 
@@ -776,7 +781,7 @@ class NewsAgent(BaseAgent):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
-        print(f"[news] 파일 저장: {output_dir}")
+        self._log(f"파일 저장: {output_dir}")
 
 
 # ─── 유틸 ────────────────────────────────────────────────────────

@@ -1,5 +1,4 @@
 """수집 결과 조회 API"""
-import json
 from fastapi import APIRouter, HTTPException, Query
 from core.db import CrawlDB
 
@@ -30,11 +29,9 @@ def dashboard_stats():
         )
         success_crawls = cur.fetchone()["cnt"]
 
-        cur.execute("SELECT SUM(product_count) AS total FROM crawl_results WHERE status = 'success'")
-        row = cur.fetchone()
-        total_products = row["total"] or 0
+        cur.execute("SELECT COALESCE(SUM(product_count), 0) AS cnt FROM crawl_results WHERE status = 'success'")
+        total_products = cur.fetchone()["cnt"]
 
-        # ── 사이트별 최신 수집 현황 (카테고리별 그룹) ──
         cur.execute("""
             SELECT s.id as site_id, s.site_name, s.site_url, s.category,
                    s.agent_type, s.is_active,
@@ -50,7 +47,6 @@ def dashboard_stats():
         """)
         site_status = [dict(row) for row in cur.fetchall()]
 
-        # ── 최근 크롤링 10건 ──
         cur.execute("""
             SELECT r.id, r.site_id, s.site_name, s.agent_type, s.category,
                    r.crawl_date, r.status, r.product_count, r.elapsed_sec, r.error_msg
@@ -114,7 +110,9 @@ def get_result_detail(result_id: int):
     try:
         cur = db._cur()
         cur.execute("""
-            SELECT r.*, s.site_name, s.site_url, s.agent_type, s.category, s.crawl_config
+            SELECT r.id, r.site_id, r.crawl_date, r.status,
+                   r.product_count, r.error_msg, r.elapsed_sec,
+                   s.site_name, s.site_url, s.agent_type, s.category
             FROM crawl_results r
             JOIN crawl_sites s ON r.site_id = s.id
             WHERE r.id = %s
@@ -124,21 +122,15 @@ def get_result_detail(result_id: int):
             raise HTTPException(404, "결과를 찾을 수 없습니다")
 
         result = dict(row)
-        if result.get("products") and isinstance(result["products"], str):
-            try:
-                result["products"] = json.loads(result["products"])
-            except json.JSONDecodeError:
-                result["products"] = []
-        if result.get("store_info") and isinstance(result["store_info"], str):
-            try:
-                result["store_info"] = json.loads(result["store_info"])
-            except json.JSONDecodeError:
-                result["store_info"] = {}
-        if result.get("crawl_config") and isinstance(result["crawl_config"], str):
-            try:
-                result["crawl_config"] = json.loads(result["crawl_config"])
-            except json.JSONDecodeError:
-                result["crawl_config"] = {}
+
+        crawl_data = db.get_crawl_data(result_id)
+        if crawl_data:
+            result["items"] = crawl_data.get("items", [])
+            result["store_info"] = crawl_data.get("store_info", {})
+        else:
+            result["items"] = []
+            result["store_info"] = {}
+
         return result
     finally:
         db.close()

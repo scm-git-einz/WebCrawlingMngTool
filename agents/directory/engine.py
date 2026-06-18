@@ -20,10 +20,11 @@ from datetime import datetime
 from urllib.parse import urljoin
 
 from core.base_agent import BaseAgent, DEFAULT_SETTINGS
+from core.failure_collector import FailureCollector
 from core.network_interceptor import NetworkInterceptor
 
 
-_TAG = "[directory]"
+# _TAG 제거: BaseAgent._log() 공통 로그 사용
 
 _DEFAULT_FIELDS = ["name", "category"]
 
@@ -79,15 +80,16 @@ class DirectoryAgent(BaseAgent):
     def run_site(self, site_id: int):
         site = self.db.get_site(site_id)
         if not site:
-            _log(f"사이트 ID={site_id} 를 찾을 수 없습니다")
+            self._log(f"사이트 ID={site_id} 를 찾을 수 없습니다")
             return
 
         result_id = self.db.create_result(site_id)
         t0 = time.time()
         cfg = self._normalize_config(self.get_crawl_config(site))
         url = site["site_url"]
+        self._failure_collector = FailureCollector(site_id, result_id, self.agent_type)
 
-        _log(f"목록 수집 시작: {site['site_name']}  "
+        self._log(f"목록 수집 시작: {site['site_name']}  "
              f"type={cfg['list_type']}  index={cfg['index_navigation']}")
 
         try:
@@ -105,7 +107,7 @@ class DirectoryAgent(BaseAgent):
 
             interceptor.stop(self.page)
             captured = list(interceptor.captured)
-            _log(f"네트워크 요청 {len(captured)}건 캡처")
+            self._log(f"네트워크 요청 {len(captured)}건 캡처")
 
             # 목록 수집
             if cfg.get("list_type") == "brand_branch":
@@ -138,7 +140,7 @@ class DirectoryAgent(BaseAgent):
                 elapsed_sec=elapsed,
             )
             self._save_json(site, items, cfg)
-            _log(f"목록 수집 완료: {len(items)}개 항목, {elapsed:.1f}초")
+            self._log(f"목록 수집 완료: {len(items)}개 항목, {elapsed:.1f}초")
 
         except Exception as e:
             elapsed = time.time() - t0
@@ -146,9 +148,12 @@ class DirectoryAgent(BaseAgent):
                 result_id, status="failed",
                 error_msg=str(e), elapsed_sec=elapsed,
             )
-            _log(f"목록 수집 실패: {e}")
+            self._record_failure("exception", f"목록 수집 실패: {e}")
+            self._log(f"목록 수집 실패: {e}")
 
         finally:
+            if self._failure_collector:
+                self._failure_collector.save(self.db)
             self.browser_mgr.close()
             self.page = None
 
@@ -170,10 +175,10 @@ class DirectoryAgent(BaseAgent):
         # 카테고리 탭 탐지
         cat_tabs = self.page.evaluate(_JS_DETECT_CATEGORY_TABS)
         if cat_tabs:
-            _log(f"카테고리 탭 {len(cat_tabs)}개 탐지: "
+            self._log(f"카테고리 탭 {len(cat_tabs)}개 탐지: "
                  + ", ".join(t.get("text", "") for t in cat_tabs[:5]) + "...")
         else:
-            _log("카테고리 탭 없음 → 현재 페이지에서 직접 추출")
+            self._log("카테고리 탭 없음 → 현재 페이지에서 직접 추출")
 
         # 수집 대상 카테고리 결정
         if categories:
@@ -186,7 +191,7 @@ class DirectoryAgent(BaseAgent):
         for ti, target in enumerate(targets):
             code = target["code"]
             label = target["text"]
-            _log(f"카테고리 [{label}] ({ti+1}/{len(targets)})")
+            self._log(f"카테고리 [{label}] ({ti+1}/{len(targets)})")
 
             if code is not None and cat_tabs:
                 try:
@@ -196,7 +201,7 @@ class DirectoryAgent(BaseAgent):
                     )
                     self.page.wait_for_timeout(4000)
                 except Exception as e:
-                    _log(f"  카테고리 전환 실패: {e}")
+                    self._log(f"  카테고리 전환 실패: {e}")
                     continue
 
             # 더보기 전체 로드
@@ -220,7 +225,7 @@ class DirectoryAgent(BaseAgent):
                     all_items.append(item)
                     added += 1
 
-            _log(f"  +{added}개 (총 {len(all_items)})")
+            self._log(f"  +{added}개 (총 {len(all_items)})")
             if ti < len(targets) - 1:
                 self._delay()
 
@@ -236,7 +241,7 @@ class DirectoryAgent(BaseAgent):
             branch = result.get("branch", "")
             loaded = result.get("loaded", 0)
             total = result.get("total", 0)
-            _log(f"  더보기: {branch} ({loaded}/{total})")
+            self._log(f"  더보기: {branch} ({loaded}/{total})")
             self.page.wait_for_timeout(2000)
             self._delay()
 
@@ -252,14 +257,14 @@ class DirectoryAgent(BaseAgent):
         # 인덱스 탭/링크 탐지
         index_tabs = self.page.evaluate(_JS_DETECT_INDEX_TABS)
         if not index_tabs:
-            _log("인덱스 탭을 찾을 수 없음 → 단일 페이지 모드로 전환")
+            self._log("인덱스 탭을 찾을 수 없음 → 단일 페이지 모드로 전환")
             return self._collect_single_page(cfg, captured)
 
-        _log(f"인덱스 탭 {len(index_tabs)}개 탐지")
+        self._log(f"인덱스 탭 {len(index_tabs)}개 탐지")
 
         for idx, tab in enumerate(index_tabs):
             label = tab.get("label", "")
-            _log(f"인덱스 [{label}] ({idx+1}/{len(index_tabs)})")
+            self._log(f"인덱스 [{label}] ({idx+1}/{len(index_tabs)})")
 
             try:
                 # 탭 클릭
@@ -280,10 +285,10 @@ class DirectoryAgent(BaseAgent):
                         all_items.append(item)
                         added += 1
 
-                _log(f"  +{added}개 (총 {len(all_items)})")
+                self._log(f"  +{added}개 (총 {len(all_items)})")
 
             except Exception as e:
-                _log(f"  인덱스 [{label}] 오류: {e}")
+                self._log(f"  인덱스 [{label}] 오류: {e}")
 
             self._delay()
 
@@ -349,7 +354,7 @@ class DirectoryAgent(BaseAgent):
                     if item.get("name"):
                         items.append(item)
                 if items:
-                    _log(f"API 탐지: {len(items)}개 항목")
+                    self._log(f"API 탐지: {len(items)}개 항목")
                     return items
 
         return None
@@ -376,7 +381,7 @@ class DirectoryAgent(BaseAgent):
     def _collect_item_details(self, items: list, site: dict) -> list:
         """각 항목의 상세 페이지에서 추가 정보를 수집한다."""
         base_url = site["site_url"].rstrip("/")
-        _log(f"상세 수집 대상: {len(items)}개")
+        self._log(f"상세 수집 대상: {len(items)}개")
 
         for i, item in enumerate(items, 1):
             url = item.get("detail_url", "")
@@ -386,7 +391,7 @@ class DirectoryAgent(BaseAgent):
             if not url.startswith("http"):
                 url = urljoin(base_url + "/", url)
 
-            _log(f"[{i}/{len(items)}] {item.get('name', '')[:30]}")
+            self._log(f"[{i}/{len(items)}] {item.get('name', '')[:30]}")
 
             try:
                 resp = self._safe_goto(url)
@@ -405,12 +410,12 @@ class DirectoryAgent(BaseAgent):
                     if detail.get("brand_count"):
                         item["brand_count"] = detail["brand_count"]
             except Exception as e:
-                _log(f"  상세 오류: {e}")
+                self._log(f"  상세 오류: {e}")
 
             if i < len(items):
                 self._delay()
 
-        _log("상세 수집 완료")
+        self._log("상세 수집 완료")
         return items
 
     # ══════════════════════════════════════════════════════════════
@@ -469,7 +474,7 @@ class DirectoryAgent(BaseAgent):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
-        _log(f"파일 저장: {output_dir}")
+        self._log(f"파일 저장: {output_dir}")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -920,8 +925,7 @@ _JS_EXTRACT_ITEM_DETAIL = """(() => {
 # 유틸리티
 # ══════════════════════════════════════════════════════════════════
 
-def _log(msg: str):
-    print(f"{_TAG} {msg}")
+# _log() 제거: BaseAgent.self._log() 공통 로그 사용
 
 
 def _now() -> str:

@@ -21,10 +21,11 @@ from datetime import datetime
 from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
 
 from core.base_agent import BaseAgent, DEFAULT_SETTINGS
+from core.failure_collector import FailureCollector
 from core.network_interceptor import NetworkInterceptor
 
 
-_TAG = "[product]"
+# _TAG 제거: BaseAgent._log() 공통 로그 사용
 
 _DEFAULT_FIELDS = ["name", "price", "brand", "image"]
 
@@ -131,7 +132,7 @@ class ProductAgent(BaseAgent):
     def run_site(self, site_id: int):
         site = self.db.get_site(site_id)
         if not site:
-            _log(f"사이트 ID={site_id} 를 찾을 수 없습니다")
+            self._log(f"사이트 ID={site_id} 를 찾을 수 없습니다")
             return
 
         result_id = self.db.create_result(site_id)
@@ -139,8 +140,9 @@ class ProductAgent(BaseAgent):
         cfg = self._normalize_config(self.get_crawl_config(site))
         self._cfg = cfg  # _apply_detail()에서 detail_fields 참조용
         url = site["site_url"]
+        self._failure_collector = FailureCollector(site_id, result_id, self.agent_type)
 
-        _log(f"수집 시작: {site['site_name']}  type={cfg['list_type']}  "
+        self._log(f"수집 시작: {site['site_name']}  type={cfg['list_type']}  "
              f"pagination={cfg['pagination']}")
 
         try:
@@ -160,11 +162,11 @@ class ProductAgent(BaseAgent):
 
             interceptor.stop(self.page)
             captured = list(interceptor.captured)
-            _log(f"네트워크 요청 {len(captured)}건 캡처")
+            self._log(f"네트워크 요청 {len(captured)}건 캡처")
 
             # 2) 페이지 구조 분석
             detection = self._detect_page_structure(captured)
-            _log(f"탐지 결과: method={detection['method']}, "
+            self._log(f"탐지 결과: method={detection['method']}, "
                  f"초기 상품={len(detection.get('products', []))}건")
 
             # 3) 상품 목록 수집
@@ -187,7 +189,7 @@ class ProductAgent(BaseAgent):
                 elapsed_sec=elapsed,
             )
             self._save_json(site, products)
-            _log(f"수집 완료: {len(products)}개 상품, {elapsed:.1f}초")
+            self._log(f"수집 완료: {len(products)}개 상품, {elapsed:.1f}초")
 
         except Exception as e:
             elapsed = time.time() - t0
@@ -195,9 +197,12 @@ class ProductAgent(BaseAgent):
                 result_id, status="failed",
                 error_msg=str(e), elapsed_sec=elapsed,
             )
-            _log(f"수집 실패: {e}")
+            self._record_failure("exception", f"수집 실패: {e}")
+            self._log(f"수집 실패: {e}")
 
         finally:
+            if self._failure_collector:
+                self._failure_collector.save(self.db)
             self.browser_mgr.close()
             self.page = None
 
@@ -218,7 +223,7 @@ class ProductAgent(BaseAgent):
         if detection:
             return detection
 
-        _log("자동 탐지 실패 — 빈 결과로 진행")
+        self._log("자동 탐지 실패 — 빈 결과로 진행")
         return {"method": "none", "products": []}
 
     def _try_api_detection(self, captured: list) -> dict | None:
@@ -242,7 +247,7 @@ class ProductAgent(BaseAgent):
                 }
 
         if best and best_count >= 3:
-            _log(f"API 탐지: {best_count}개 상품, URL={best['api_url'][:80]}")
+            self._log(f"API 탐지: {best_count}개 상품, URL={best['api_url'][:80]}")
             return best
         return None
 
@@ -257,7 +262,7 @@ class ProductAgent(BaseAgent):
             return None
 
         items = result["items"]
-        _log(f"JS 전역변수 탐지: {result['source']}, {len(items)}개 상품")
+        self._log(f"JS 전역변수 탐지: {result['source']}, {len(items)}개 상품")
         return {
             "method": "state_var",
             "products": items[:200],
@@ -276,7 +281,7 @@ class ProductAgent(BaseAgent):
             return None
 
         items = result["items"]
-        _log(f"DOM 탐지: {len(items)}개 상품 카드")
+        self._log(f"DOM 탐지: {len(items)}개 상품 카드")
         return {
             "method": "dom",
             "products": items,
@@ -325,7 +330,7 @@ class ProductAgent(BaseAgent):
                     products.append(item)
                     added += 1
 
-            _log(f"스크롤 {page_idx+1}: +{added}, 총 {len(products)}")
+            self._log(f"스크롤 {page_idx+1}: +{added}, 총 {len(products)}")
 
             if added == 0:
                 break
@@ -360,7 +365,7 @@ class ProductAgent(BaseAgent):
                     continue
 
             if not clicked:
-                _log(f"다음 버튼 없음 → 페이지 {page_idx}에서 종료")
+                self._log(f"다음 버튼 없음 → 페이지 {page_idx}에서 종료")
                 break
 
             new_items = self._re_extract(detection)
@@ -372,7 +377,7 @@ class ProductAgent(BaseAgent):
                     products.append(item)
                     added += 1
 
-            _log(f"페이지 {page_idx+1}: +{added}, 총 {len(products)}")
+            self._log(f"페이지 {page_idx+1}: +{added}, 총 {len(products)}")
 
             if added == 0:
                 break
@@ -394,7 +399,7 @@ class ProductAgent(BaseAgent):
 
         for page_idx in range(1, max_pages):
             paged_url = _increment_page_param(api_url, page_idx + 1)
-            _log(f"API 페이지 {page_idx+1}: {paged_url[:80]}")
+            self._log(f"API 페이지 {page_idx+1}: {paged_url[:80]}")
 
             try:
                 raw = self.page.evaluate(f"""
@@ -407,12 +412,12 @@ class ProductAgent(BaseAgent):
                     }}
                 """)
             except Exception as e:
-                _log(f"API 호출 실패: {e}")
+                self._log(f"API 호출 실패: {e}")
                 break
 
             items = _find_product_array(raw) if raw else []
             if not items:
-                _log("API 결과 없음 → 종료")
+                self._log("API 결과 없음 → 종료")
                 break
 
             added = 0
@@ -423,7 +428,7 @@ class ProductAgent(BaseAgent):
                     products.append(item)
                     added += 1
 
-            _log(f"API 페이지 {page_idx+1}: +{added}, 총 {len(products)}")
+            self._log(f"API 페이지 {page_idx+1}: +{added}, 총 {len(products)}")
 
             if added == 0:
                 break
@@ -463,7 +468,7 @@ class ProductAgent(BaseAgent):
 
         URL이 있으면 직접 이동, 없으면 카드 클릭(product_id/image)으로 이동.
         """
-        _log(f"상세 수집 대상: {len(products)}개")
+        self._log(f"상세 수집 대상: {len(products)}개")
         base_url = site["site_url"].rstrip("/")
         list_url = self.page.url
 
@@ -473,7 +478,7 @@ class ProductAgent(BaseAgent):
 
             if url:
                 # ── URL 기반 상세 이동 ──
-                _log(f"[{i}/{len(products)}] {name_preview}")
+                self._log(f"[{i}/{len(products)}] {name_preview}")
                 try:
                     resp = self._safe_goto(url)
                     if self._is_blocked(resp):
@@ -481,7 +486,7 @@ class ProductAgent(BaseAgent):
                     self._human_dwell()
                     self._apply_detail(prod)
                 except Exception as e:
-                    _log(f"  상세 오류: {e}")
+                    self._log(f"  상세 오류: {e}")
             else:
                 # ── 카드 클릭 기반 상세 이동 (javascript: 링크 대응) ──
                 product_id = prod.get("product_id", "")
@@ -489,14 +494,14 @@ class ProductAgent(BaseAgent):
                 if not product_id and not image_url:
                     continue
 
-                _log(f"[{i}/{len(products)}] {name_preview} (클릭)")
+                self._log(f"[{i}/{len(products)}] {name_preview} (클릭)")
                 try:
                     before_url = self.page.url
                     clicked = self.page.evaluate(
                         _JS_CLICK_CARD,
                         {"productId": product_id, "imageUrl": image_url})
                     if not clicked:
-                        _log("  카드 클릭 실패")
+                        self._log("  카드 클릭 실패")
                         continue
 
                     # 페이지 전환 대기
@@ -522,10 +527,10 @@ class ProductAgent(BaseAgent):
                         except Exception:
                             pass
                     else:
-                        _log("  페이지 전환 없음")
+                        self._log("  페이지 전환 없음")
 
                 except Exception as e:
-                    _log(f"  상세 오류: {e}")
+                    self._log(f"  상세 오류: {e}")
                     try:
                         self._safe_goto(list_url)
                         self.page.wait_for_timeout(2000)
@@ -535,7 +540,7 @@ class ProductAgent(BaseAgent):
             if i < len(products):
                 self._delay()
 
-        _log("상세 수집 완료")
+        self._log("상세 수집 완료")
         return products
 
     def _apply_detail(self, prod: dict):
@@ -712,7 +717,7 @@ class ProductAgent(BaseAgent):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
-        _log(f"파일 저장: {output_dir}")
+        self._log(f"파일 저장: {output_dir}")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1585,15 +1590,7 @@ _JS_EXTRACT_DETAIL = r"""(() => {
 # 유틸리티 함수
 # ══════════════════════════════════════════════════════════════════
 
-def _log(msg: str):
-    """인코딩 안전 로그 출력. Windows cp949 콘솔에서도 유니코드 문자 안전 처리."""
-    line = f"{_TAG} {msg}"
-    try:
-        print(line)
-    except UnicodeEncodeError:
-        import sys
-        sys.stdout.buffer.write((line + "\n").encode("utf-8", errors="replace"))
-        sys.stdout.buffer.flush()
+# self._log() 제거: BaseAgent.self._log() 공통 로그 사용
 
 
 def _safe(text: str) -> str:
