@@ -996,7 +996,7 @@ function CredentialManager({ siteId, credentials: initialCreds, showConfirm, clo
 
 function ConfigModal({ site, onClose, onSaved, showConfirm, closeConfirm, agentFieldDefs }) {
   const agentType = site.agent_type
-  const modalWidth = agentType === 'news' ? 560 : agentType === 'product' ? 580 : agentType === 'order' ? 600 : agentType === 'coupon' ? 580 : 520
+  const modalWidth = agentType === 'news' ? 560 : agentType === 'product' ? 580 : agentType === 'order' ? 600 : agentType === 'coupon' ? 580 : agentType === 'brand' ? 560 : agentType === 'local' ? 520 : 520
 
   const [editInfo, setEditInfo] = useState({ name: site.name, url: site.url })
   const [infoEditing, setInfoEditing] = useState(false)
@@ -1112,6 +1112,8 @@ function ConfigModal({ site, onClose, onSaved, showConfirm, closeConfirm, agentF
           {agentType === 'directory' && <DirectoryConfig site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} fieldDefs={agentFieldDefs['directory'] || []} />}
           {agentType === 'order'     && <OrderConfig     site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} fieldDefs={agentFieldDefs['order'] || []} />}
           {agentType === 'coupon'    && <CouponConfig    site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} />}
+          {agentType === 'brand'     && <BrandConfig     site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} fieldDefs={agentFieldDefs['brand'] || []} />}
+          {agentType === 'local'     && <LocalConfig     site={site} onSaved={onSaved} showConfirm={showConfirm} closeConfirm={closeConfirm} fieldDefs={agentFieldDefs['local'] || []} />}
           <CredentialManager siteId={site.id} credentials={site.credentials} showConfirm={showConfirm} closeConfirm={closeConfirm} />
         </div>
       </div>
@@ -2334,11 +2336,11 @@ const COLLECT_ITEMS_BY_AGENT = {
     color: '#ecfdf5',
     textColor: '#065f46',
     fields: [
-      { key: 'brand',            label: '브랜드',  group: 'basic', default: true },
-      { key: 'name',             label: '상품명',  group: 'basic', default: true },
-      { key: 'regular_price',    label: '정상가',  group: 'basic', default: true },
-      { key: 'discounted_price', label: '할인가',  group: 'basic', default: true },
-      { key: 'discount_rate',    label: '할인율',  group: 'basic', default: true },
+      { key: 'brand',            label: '브랜드',        group: 'basic', default: true },
+      { key: 'name',             label: '상품명',        group: 'basic', default: true },
+      { key: 'regular_price',    label: '정상가격(원화)', group: 'basic', default: true },
+      { key: 'discount_rate',    label: '할인율',        group: 'basic', default: true },
+      { key: 'discounted_price', label: '할인가격(원화)', group: 'basic', default: true },
     ],
   },
 }
@@ -3339,18 +3341,12 @@ const BRAND_COLLECT_FIELDS = [
 ]
 
 /* ── local: 로컬 e커머스 상품 상세 수집 설정 ──────── */
-const LOCAL_COLLECT_FIELDS = [
-  { key: 'brand',            label: '브랜드',  group: 'basic' },
-  { key: 'name',             label: '상품명',  group: 'basic' },
-  { key: 'regular_price',    label: '정상가',  group: 'basic' },
-  { key: 'discounted_price', label: '할인가',  group: 'basic' },
-  { key: 'discount_rate',    label: '할인율',  group: 'basic' },
-]
-
-function LocalConfig({ site, onSaved, showConfirm, closeConfirm }) {
+function LocalConfig({ site, onSaved, showConfirm, closeConfirm, fieldDefs }) {
+  const localFields = fieldDefs.filter(f => f.config_key === 'collect_fields')
+  const defaultFieldKeys = localFields.map(f => f.key)
   const initConfig = {
     local_type: 'oliveyoung',
-    collect_fields: ['brand', 'name', 'regular_price', 'discounted_price', 'discount_rate'],
+    collect_fields: (site.config?.collect_fields?.length > 0) ? site.config.collect_fields : defaultFieldKeys,
     ...site.config,
   }
   const [config, setConfig]   = useState(initConfig)
@@ -3416,7 +3412,7 @@ function LocalConfig({ site, onSaved, showConfirm, closeConfirm }) {
         <h4 className="config-section-title">수집 필드</h4>
         <div className="config-section-desc">수집할 데이터 항목을 선택합니다</div>
         <div className="field-checkbox-grid">
-          {LOCAL_COLLECT_FIELDS.map(f => {
+          {localFields.map(f => {
             const checked = (config.collect_fields || []).includes(f.key)
             return (
               <label key={f.key} className={`field-checkbox ${checked ? 'checked' : ''}`}>
@@ -3452,12 +3448,14 @@ function LocalConfig({ site, onSaved, showConfirm, closeConfirm }) {
   )
 }
 
-function BrandConfig({ site, onSaved, showConfirm, closeConfirm }) {
+function BrandConfig({ site, onSaved, showConfirm, closeConfirm, fieldDefs }) {
+  const brandFields = fieldDefs.filter(f => f.config_key === 'collect_fields')
+  const defaultFieldKeys = brandFields.map(f => f.key)
   const [keywordText, setKeywordText] = useState(
     (site.keywords || []).map(k => k.keyword).join('\n')
   )
   const [config, setConfig] = useState({
-    collect_fields: ['brand', 'name', 'image', 'original_price'],
+    collect_fields: (site.config?.collect_fields?.length > 0) ? site.config.collect_fields : defaultFieldKeys,
     ...site.config,
   })
   const [saving, setSaving] = useState(false)
@@ -3582,7 +3580,7 @@ function BrandConfig({ site, onSaved, showConfirm, closeConfirm }) {
       <div className="product-config-section active">
         <h4 className="config-section-title">상품 수집 항목</h4>
         <div className="field-checkbox-grid">
-          {BRAND_COLLECT_FIELDS.map(f => (
+          {brandFields.map(f => (
             <label key={f.key} className={`field-checkbox ${fields.includes(f.key) ? 'checked' : ''}`}>
               <input type="checkbox" checked={fields.includes(f.key)} onChange={() => toggleField(f.key)} />
               <span>{f.label}</span>

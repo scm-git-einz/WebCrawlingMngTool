@@ -16,12 +16,13 @@ const STATUS_LABEL = {
 const AGENT_LABELS = {
   product: '상품 수집', news: '뉴스 검색', cafe: '카페 수집',
   promotion: '이벤트 수집', banner: '배너 수집', directory: '목록 수집',
-  order: '주문서 수집',
+  order: '주문서 수집', local: '로컬 수집',
 }
 
 const AGENT_BADGE_CLASS = {
   product: 'dp', news: 'pending', cafe: 'tess',
   promotion: 'success', banner: 'running', directory: 'failed',
+  local: 'success',
 }
 
 /* ── 날짜/시간 유틸 ── */
@@ -283,6 +284,8 @@ function ExpandedDetail({ detail }) {
       {agentType === 'banner'    && <BannerDetail     detail={detail} />}
       {agentType === 'directory' && <DirectoryDetail  detail={detail} />}
       {agentType === 'order'     && <OrderDetail      detail={detail} />}
+      {agentType === 'brand'     && <BrandDetail      detail={detail} />}
+      {agentType === 'local'     && <LocalDetail      detail={detail} />}
       {agentType === 'coupon'    && <CouponDetail     detail={detail} />}
     </div>
   )
@@ -1208,6 +1211,67 @@ function OrderDetail({ detail }) {
 
       {results.length === 0 && (
         <div className="empty-state">수집된 결제정보가 없습니다</div>
+      )}
+    </>
+  )
+}
+
+
+/* ── local: 로컬 e커머스 상품 상세 결과 ────────────── */
+function LocalDetail({ detail }) {
+  const results = detail.products || []
+  const successCount = results.filter(r => r.name && !r.error).length
+
+  const fmtPrice = (v) => {
+    if (!v) return '-'
+    return String(v).replace(/[^\d,]/g, '') ? String(v) : '-'
+  }
+
+  return (
+    <>
+      <div style={{display:'flex',gap:24,marginBottom:16,fontSize:13,color:'var(--text-secondary)',flexWrap:'wrap'}}>
+        <span>수집 URL: <strong>{results.length}</strong>건</span>
+        <span>수집 성공: <strong>{successCount}</strong>건</span>
+      </div>
+
+      {results.length > 0 && (
+        <div className="product-table-scroll">
+          <table className="price-table">
+            <thead>
+              <tr>
+                <th style={{width:30}}>#</th>
+                <th style={{width:100}}>브랜드</th>
+                <th>상품명</th>
+                <th style={{width:110,textAlign:'right'}}>정상가</th>
+                <th style={{width:70,textAlign:'center'}}>할인율</th>
+                <th style={{width:110,textAlign:'right'}}>할인가</th>
+              </tr>
+            </thead>
+            <tbody>
+              {results.map((r, i) => (
+                <tr key={i} style={r.error ? {color:'var(--text-secondary)'} : {}}>
+                  <td style={{color:'var(--text-secondary)'}}>{i + 1}</td>
+                  <td style={{fontSize:12}}>{r.brand || '-'}</td>
+                  <td style={{fontWeight:500,maxWidth:320,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                    {r.error
+                      ? <span style={{color:'var(--danger)',fontSize:12}}>{r.error}</span>
+                      : r.url
+                        ? <a href={r.url} target="_blank" rel="noreferrer" style={{color:'inherit',textDecoration:'underline',textUnderlineOffset:3}}>{r.name || r.url}</a>
+                        : (r.name || <span style={{color:'var(--text-secondary)'}}>-</span>)
+                    }
+                  </td>
+                  <td style={{textAlign:'right'}}>{fmtPrice(r.regular_price)}</td>
+                  <td style={{textAlign:'center',color:'var(--danger)',fontWeight:600}}>{r.discount_rate || '-'}</td>
+                  <td style={{textAlign:'right',fontWeight:600}}>{fmtPrice(r.discounted_price)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {results.length === 0 && (
+        <div className="empty-state">수집된 상품 정보가 없습니다</div>
       )}
     </>
   )
