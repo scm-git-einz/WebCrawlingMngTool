@@ -64,7 +64,8 @@ def main():
     )
 
     # 3) Vite 프론트엔드 시작
-    print("[web] Vite 프론트엔드 시작 (port 5173)...")
+    web_port = os.getenv("WEB_PORT", "5173")
+    print(f"[web] Vite 프론트엔드 시작 (port {web_port})...")
     frontend = subprocess.Popen(
         [NPM, "run", "dev"],
         cwd=FRONTEND_DIR,
@@ -72,7 +73,8 @@ def main():
     )
 
     time.sleep(3)
-    url = "http://10.149.67.179:5173"
+    api_host = os.getenv("API_HOST", server_host)
+    url = f"http://{api_host}:{web_port}"
     print(f"\n[web] 브라우저에서 접속하세요: {url}")
     print("[web] 종료하려면 Ctrl+C를 누르세요.\n")
 

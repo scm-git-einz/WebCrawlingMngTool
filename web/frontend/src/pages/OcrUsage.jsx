@@ -22,9 +22,10 @@ export default function OcrUsage() {
   useEffect(() => {
     setLoading(true)
     const qs = selectedSite ? `?site_id=${selectedSite}` : ''
+    const detailQs = selectedSite ? `?site_id=${selectedSite}&limit=200` : '?limit=200'
     Promise.all([
       fetch(`/api/ocr/summary${qs}`).then(r => r.json()),
-      fetch(`/api/ocr/detail${qs}&limit=200`).then(r => r.json()),
+      fetch(`/api/ocr/detail${detailQs}`).then(r => r.json()),
     ]).then(([sum, det]) => {
       setSummary(sum)
       setDetails(det)
