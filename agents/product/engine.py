@@ -154,7 +154,7 @@ class ProductAgent(BaseAgent):
 
             resp = self._safe_goto(url)
             if self._is_blocked(resp):
-                raise RuntimeError(f"차단됨 (HTTP {resp.status}, proxy={self._proxy_ip})")
+                raise RuntimeError(f"차단됨 (HTTP {resp.status})")
 
             self.page.wait_for_timeout(DEFAULT_SETTINGS["initial_wait_ms"])
             self._human_dwell()

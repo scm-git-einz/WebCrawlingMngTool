@@ -5,7 +5,8 @@ PostgreSQL DB 연동 모듈
   - crawl_sites:           현업 담당자가 등록하는 수집 대상 사이트
   - platforms:             플랫폼 정의 (감지 규칙 + 브라우저 설정)
   - extraction_templates:  플랫폼별 추출 템플릿
-  - crawl_results:         수집 결과
+  - crawl_results:         수집 모니터링 (상태/건수/소요시간/에러)
+  - crawl_data:            수집 원시 데이터 (메달리온 Bronze 레이어)
   - news_keywords:         뉴스 검색 키워드 (사이트별, 활성/비활성)
   - site_credentials:      사이트별 로그인 계정 (복수 계정, 로테이션 지원)
   - ocr_usage_log:         OCR/Document Parser API 사용 이력
@@ -113,8 +114,6 @@ class CrawlDB:
                 site_id       INTEGER          NOT NULL REFERENCES crawl_sites(id),
                 crawl_date    TIMESTAMP         NOT NULL DEFAULT NOW(),
                 status        TEXT             NOT NULL DEFAULT 'pending',
-                store_info    JSONB,
-                products      JSONB,
                 product_count INTEGER          NOT NULL DEFAULT 0,
                 error_msg     TEXT,
                 elapsed_sec   DOUBLE PRECISION
@@ -186,6 +185,21 @@ class CrawlDB:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cfl_site_id ON crawl_failure_log(site_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cfl_crawl_date ON crawl_failure_log(crawl_date DESC)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_cfl_agent_type ON crawl_failure_log(agent_type)")
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS crawl_data (
+                id              SERIAL       PRIMARY KEY,
+                crawl_result_id INTEGER      NOT NULL REFERENCES crawl_results(id),
+                site_id         INTEGER      NOT NULL REFERENCES crawl_sites(id),
+                agent_type      TEXT         NOT NULL,
+                items           JSONB        NOT NULL DEFAULT '[]',
+                store_info      JSONB        DEFAULT '{}',
+                item_count      INTEGER      NOT NULL DEFAULT 0,
+                created_at      TIMESTAMP    NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_crawl_data_result ON crawl_data(crawl_result_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_crawl_data_site ON crawl_data(site_id)")
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS site_credentials (
@@ -639,19 +653,45 @@ class CrawlDB:
         cur = self._cur()
         cur.execute(
             "UPDATE crawl_results SET "
-            "status = %s, store_info = %s, products = %s, "
+            "status = %s, "
             "product_count = %s, error_msg = %s, elapsed_sec = %s "
             "WHERE id = %s",
             (
                 status,
-                json.dumps(store_info, ensure_ascii=False) if store_info else None,
-                json.dumps(products, ensure_ascii=False) if products else None,
                 product_count,
                 error_msg,
                 elapsed_sec,
                 result_id,
             ),
         )
+        if products is not None:
+            cur.execute(
+                "SELECT site_id FROM crawl_results WHERE id = %s",
+                (result_id,),
+            )
+            row = cur.fetchone()
+            site_id = row["site_id"] if row else 0
+            agent_type = ""
+            if site_id:
+                cur.execute(
+                    "SELECT agent_type FROM crawl_sites WHERE id = %s",
+                    (site_id,),
+                )
+                site_row = cur.fetchone()
+                agent_type = site_row["agent_type"] if site_row else ""
+            cur.execute(
+                "INSERT INTO crawl_data "
+                "(crawl_result_id, site_id, agent_type, items, store_info, item_count) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (
+                    result_id,
+                    site_id,
+                    agent_type,
+                    json.dumps(products, ensure_ascii=False),
+                    json.dumps(store_info, ensure_ascii=False) if store_info else "{}",
+                    product_count,
+                ),
+            )
         self.conn.commit()
 
     def mark_running_as_stopped(self, site_id: int | None = None) -> int:
@@ -684,10 +724,26 @@ class CrawlDB:
         if not row:
             return None
         d = dict(row)
+        crawl_data = self.get_crawl_data(d["id"])
+        if crawl_data:
+            d["items"] = crawl_data.get("items")
+            d["store_info"] = crawl_data.get("store_info")
+        return d
+
+    def get_crawl_data(self, result_id: int) -> dict | None:
+        cur = self._cur()
+        cur.execute(
+            "SELECT * FROM crawl_data WHERE crawl_result_id = %s",
+            (result_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        if isinstance(d.get("items"), str):
+            d["items"] = json.loads(d["items"])
         if isinstance(d.get("store_info"), str):
             d["store_info"] = json.loads(d["store_info"])
-        if isinstance(d.get("products"), str):
-            d["products"] = json.loads(d["products"])
         return d
 
     # ═══════════════════════════════════════════════════════════════

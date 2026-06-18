@@ -717,7 +717,7 @@ class OrderAgent(BaseAgent):
             self._log(f"로그인 페이지 이동: {login_url}")
             resp = self._safe_goto(login_url)
             if self._is_blocked(resp):
-                self._log(f"로그인 페이지 차단됨 (HTTP {resp.status if resp else 'N/A'}, proxy={self._proxy_ip})")
+                self._log(f"로그인 페이지 차단됨 (HTTP {resp.status if resp else 'N/A'})")
                 self._record_failure(
                     "login_fail", "로그인 페이지 차단",
                     subtype="page_blocked", url=login_url,
@@ -842,7 +842,7 @@ class OrderAgent(BaseAgent):
 
                 resp = self._safe_goto(detail_url)
                 if self._is_blocked(resp):
-                    self._log(f"  상품상세 차단됨 (HTTP {resp.status if resp else 'N/A'}, proxy={self._proxy_ip})")
+                    self._log(f"  상품상세 차단됨 (HTTP {resp.status if resp else 'N/A'})")
                     self._record_failure(
                         "http_block", f"상품상세 차단 (상품코드 {prd_no})",
                         subtype=str(resp.status) if resp else "unknown",

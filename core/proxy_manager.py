@@ -78,8 +78,8 @@ _TEST_TIMEOUT = 8
 # 캐시 유효 시간 (초) — 30분
 _CACHE_TTL = 1800
 
-# 최대 검증 프록시 수 (검증은 느리므로 제한)
-_MAX_VALIDATE = 50
+# 최대 검증 프록시 수
+_MAX_VALIDATE = 200
 
 # 검증 통과 목표 수
 _TARGET_VALID = 15
@@ -271,9 +271,12 @@ class ProxyManager:
         return proxies
 
     def _validate_proxies(self, proxies: list[dict]) -> list[dict]:
-        """프록시 유효성을 병렬로 검증한다."""
-        random.shuffle(proxies)
-        candidates = proxies[:_MAX_VALIDATE]
+        """프록시 유효성을 병렬로 검증한다. HTTP 프록시를 우선 검증."""
+        http_proxies = [p for p in proxies if p.get("protocol", "http") == "http"]
+        other_proxies = [p for p in proxies if p.get("protocol", "http") != "http"]
+        random.shuffle(http_proxies)
+        random.shuffle(other_proxies)
+        candidates = (http_proxies + other_proxies)[:_MAX_VALIDATE]
 
         validated = []
         lock = threading.Lock()
@@ -303,19 +306,20 @@ class ProxyManager:
             except Exception:
                 pass
 
-        threads = []
-        for proxy in candidates:
+        BATCH_SIZE = 30
+        for i in range(0, len(candidates), BATCH_SIZE):
             if len(validated) >= _TARGET_VALID:
                 break
-            t = threading.Thread(target=_test_one, args=(proxy,), daemon=True)
-            threads.append(t)
-            t.start()
-            if len(threads) % 10 == 0:
-                for tt in threads[-10:]:
-                    tt.join(timeout=_TEST_TIMEOUT + 2)
-
-        for t in threads:
-            t.join(timeout=_TEST_TIMEOUT + 2)
+            batch = candidates[i:i + BATCH_SIZE]
+            threads = []
+            for proxy in batch:
+                if len(validated) >= _TARGET_VALID:
+                    break
+                t = threading.Thread(target=_test_one, args=(proxy,), daemon=True)
+                threads.append(t)
+                t.start()
+            for t in threads:
+                t.join(timeout=_TEST_TIMEOUT + 2)
 
         return validated
 

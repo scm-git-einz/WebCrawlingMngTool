@@ -459,7 +459,7 @@ class CouponAgent(BaseAgent):
             self._log(f"로그인 페이지 이동: {login_url}")
             resp = self._safe_goto(login_url)
             if self._is_blocked(resp):
-                self._log(f"로그인 페이지 차단됨 (proxy={self._proxy_ip})")
+                self._log(f"로그인 페이지 차단됨")
                 self._finish_result(result_id, "blocked", start_time, "로그인 차단")
                 return
 

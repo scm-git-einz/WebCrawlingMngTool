@@ -178,7 +178,7 @@ export default function SiteSettings() {
           const res = await fetch('/api/crawl/run', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ site_ids: siteIds }),
+            body: JSON.stringify({ site_ids: siteIds, use_proxy: true }),
           })
           const data = await res.json()
           setRunResults(data.results)

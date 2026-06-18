@@ -2137,3 +2137,90 @@ CREATE TABLE agent_field_defs (
 - `web/frontend/src/components/Layout.jsx` (메뉴)
 - `web/frontend/src/App.css` (스타일)
 - `web/PROGRESS.md` (Phase 33 기록)
+
+### Phase 34. 로그 출력에 현재 IP 자동 노출
+> 모든 `_log()` 출력에 현재 사용 중인 IP(프록시/direct)를 자동 포함
+
+**사용자 요청**: 크롤링 로그에 현재 사용 중인 프록시 IP가 표시되지 않아, 봇 차단 시 어떤 IP로 접속했는지 파악 불가 → 모든 로그에 IP 노출
+
+**설계 결정**:
+- `_log()` 메서드가 모든 로그의 단일 출력점이므로, 여기에 `_proxy_ip` 자동 삽입
+- 로그 포맷 변경: `[timestamp] [agent_type] msg` → `[timestamp] [agent_type] [IP:address] msg`
+- 기존에 메시지 본문에 수동으로 `proxy=...`를 넣은 곳은 중복 제거
+
+**작업 내역**:
+
+1. **`_log()` 메서드 수정** (`core/base_agent.py`)
+   - `[IP:{proxy_ip}]` 태그를 모든 로그 라인에 자동 포함
+   - 프록시 사용 시: `[IP:http://123.45.67.89:8080]`
+   - 직접 연결 시: `[IP:direct]`
+
+2. **IP 중복 메시지 정리** (`core/base_agent.py`)
+   - `_safe_goto()`: HTTP 429/503, 403 메시지에서 `proxy=` 제거
+   - `_is_soft_blocked()`: 소프트 차단 감지 메시지에서 `proxy_info` 제거
+   - `_do_login()`: 로그인 차단 메시지에서 `proxy=` 제거
+
+3. **에이전트 6곳 IP 중복 제거**
+   - `agents/product/engine.py`: RuntimeError 메시지
+   - `agents/banner/engine.py`: RuntimeError 메시지
+   - `agents/directory/engine.py`: RuntimeError 메시지
+   - `agents/order/engine.py`: 로그인 차단 + 상품상세 차단 메시지
+   - `agents/coupon/engine.py`: 로그인 차단 메시지
+
+**로그 출력 예시**:
+```
+[2026-06-18 10:30:00] [order] [IP:http://123.45.67.89:8080] Stealth Chromium 브라우저 시작...
+[2026-06-18 10:30:05] [order] [IP:http://123.45.67.89:8080] 로그인 시도: user@example.com
+[2026-06-18 10:30:10] [order] [IP:http://123.45.67.89:8080] HTTP 403 @ lottedfs.com → 프록시 교체 시도
+[2026-06-18 10:30:11] [order] [IP:http://98.76.54.32:3128] 프록시 교체 완료
+[2026-06-18 10:30:15] [product] [IP:direct] 수집 시작: 사이트 #5
+```
+
+**수정된 파일**:
+- `core/base_agent.py` (_log 포맷 변경 + 6곳 중복 IP 제거)
+- `agents/product/engine.py` (중복 IP 제거)
+- `agents/banner/engine.py` (중복 IP 제거)
+- `agents/directory/engine.py` (중복 IP 제거)
+- `agents/order/engine.py` (중복 IP 제거 2곳)
+- `agents/coupon/engine.py` (중복 IP 제거)
+- `web/PROGRESS.md` (Phase 34 기록)
+
+---
+
+### Phase 35. 데이터 테이블 분리 — 모니터링 vs 수집 데이터
+> crawl_results(모니터링) + crawl_data(원시 데이터) 분리
+
+**사용자 요청**: 크롤링 수집 데이터를 Agent 상태/건수와 별도 테이블에 분리. 실제 수집 데이터는 향후 메달리온 아키텍처(Bronze/Silver/Gold)에 편입 예정.
+
+**설계**:
+- `crawl_results` → 모니터링 전용 (status, product_count, elapsed_sec, error_msg)
+- `crawl_data` (신규) → 수집 원시 데이터 (items JSONB, store_info JSONB) — 메달리온 Bronze 레이어
+
+**작업 내역**:
+1. **`core/db.py`** — 테이블 분리
+   - `crawl_data` 테이블 생성 (crawl_result_id FK, site_id, agent_type, items JSONB, store_info JSONB, item_count)
+   - `update_result()`: products가 있으면 `crawl_data`에 저장, `crawl_results`에는 상태/건수만 기록
+   - `get_crawl_data(result_id)`: crawl_data 조회 메서드 추가
+   - `get_latest_result()`: crawl_data JOIN으로 수집 데이터 포함 반환 (기존 데이터 fallback)
+
+2. **`web/backend/routes/results.py`** — 상세 조회 API 수정
+   - `get_result_detail()`: crawl_data에서 products 조회, 없으면 crawl_results fallback (기존 데이터 호환)
+   - `dashboard_stats()`, `list_results()`: 변경 없음 (product_count만 사용)
+
+3. **에이전트 코드**: 변경 없음 — `update_result()` 내부에서 자동 라우팅
+
+4. **기존 데이터 마이그레이션**
+   - `crawl_results.products/store_info` → `crawl_data.items/store_info`로 77건 이관
+   - `crawl_results`에서 `products`, `store_info` 컬럼 DROP
+
+5. **프론트엔드/백엔드 필드명 정리**
+   - API 응답: `products` → `items` 으로 변경 (crawl_data.items 컬럼과 일치)
+   - `CrawlResults.jsx`: 8개 상세 컴포넌트의 `detail.products` → `detail.items`
+   - `main.py`: CLI 결과 조회 `result["products"]` → `result["items"]`
+
+**수정된 파일**:
+- `core/db.py` (crawl_data 테이블 + update_result 분리 + get_crawl_data 추가 + products 컬럼 제거)
+- `web/backend/routes/results.py` (상세 조회 crawl_data JOIN, 응답 필드 items로 변경)
+- `web/frontend/src/pages/CrawlResults.jsx` (detail.products → detail.items, 8개 컴포넌트)
+- `main.py` (CLI 결과 조회 필드명 변경)
+- `web/PROGRESS.md` (Phase 35 기록)

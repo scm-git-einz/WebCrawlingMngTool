@@ -1,5 +1,4 @@
 """수집 결과 조회 API"""
-import json
 from fastapi import APIRouter, HTTPException, Query
 from core.db import CrawlDB
 
@@ -111,7 +110,9 @@ def get_result_detail(result_id: int):
     try:
         cur = db._cur()
         cur.execute("""
-            SELECT r.*, s.site_name, s.site_url, s.agent_type, s.category
+            SELECT r.id, r.site_id, r.crawl_date, r.status,
+                   r.product_count, r.error_msg, r.elapsed_sec,
+                   s.site_name, s.site_url, s.agent_type, s.category
             FROM crawl_results r
             JOIN crawl_sites s ON r.site_id = s.id
             WHERE r.id = %s
@@ -121,16 +122,15 @@ def get_result_detail(result_id: int):
             raise HTTPException(404, "결과를 찾을 수 없습니다")
 
         result = dict(row)
-        if result.get("products") and isinstance(result["products"], str):
-            try:
-                result["products"] = json.loads(result["products"])
-            except json.JSONDecodeError:
-                result["products"] = []
-        if result.get("store_info") and isinstance(result["store_info"], str):
-            try:
-                result["store_info"] = json.loads(result["store_info"])
-            except json.JSONDecodeError:
-                result["store_info"] = {}
+
+        crawl_data = db.get_crawl_data(result_id)
+        if crawl_data:
+            result["items"] = crawl_data.get("items", [])
+            result["store_info"] = crawl_data.get("store_info", {})
+        else:
+            result["items"] = []
+            result["store_info"] = {}
+
         return result
     finally:
         db.close()

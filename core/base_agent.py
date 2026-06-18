@@ -12,6 +12,7 @@
 """
 import math
 import random
+import socket
 import sys
 import time
 from abc import ABC, abstractmethod
@@ -85,6 +86,9 @@ class BaseAgent(ABC):
         self._proxy_fail_count: int = 0
         # 연속 프록시 실패 시 교체 임계값
         self._PROXY_ROTATE_THRESHOLD = 2
+        # 로컬 IP 감지 (클래스 레벨 캐시 — 최초 1회만)
+        if not BaseAgent._local_ip:
+            BaseAgent._local_ip = BaseAgent._detect_local_ip()
         # 소프트 차단 캐시 (중복 DOM 검사 방지)
         self._last_soft_block_url: str | None = None
         self._last_soft_block_result: bool = False
@@ -94,9 +98,10 @@ class BaseAgent(ABC):
     # ─── 로그 ────────────────────────────────────────────────────
 
     def _log(self, msg: str):
-        """날짜/시간 포함 UnicodeEncodeError 안전 로그 출력."""
+        """날짜/시간 + IP 포함 UnicodeEncodeError 안전 로그 출력."""
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        line = f"[{ts}] [{self.agent_type}] {msg}"
+        ip = self._proxy_ip
+        line = f"[{ts}] [{self.agent_type}] [IP:{ip}] {msg}"
         try:
             print(line)
         except UnicodeEncodeError:
@@ -120,10 +125,24 @@ class BaseAgent(ABC):
 
     @property
     def _proxy_ip(self) -> str:
-        """현재 사용 중인 프록시 서버 주소를 반환한다. 없으면 'direct'."""
+        """현재 사용 중인 IP를 반환한다. 프록시면 프록시 주소, 아니면 로컬 IP."""
         if self._current_proxy:
             return self._current_proxy.get("server", "unknown")
-        return "direct"
+        return self._local_ip
+
+    @staticmethod
+    def _detect_local_ip() -> str:
+        """로컬 머신의 외부 통신용 IP를 감지한다."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "unknown"
+
+    _local_ip: str = ""
 
     # ─── 공개 메서드 ──────────────────────────────────────────────
 
@@ -176,10 +195,13 @@ class BaseAgent(ABC):
     # ═══════════════════════════════════════════════════════════════
 
     def enable_proxy(self, proxy_mgr: ProxyManager | None = None):
-        """프록시 로테이션을 활성화한다."""
+        """프록시 로테이션을 활성화하고 초기 프록시를 즉시 확보한다."""
         self._use_proxy = True
         self._proxy_mgr = proxy_mgr or get_proxy_manager()
         count = self._proxy_mgr.available_count
+        proxy = self._proxy_mgr.get_next()
+        if proxy:
+            self._current_proxy = proxy
         self._log(f"프록시 로테이션 활성화 (사용 가능: {count}개)")
 
     def _get_initial_proxy(self) -> dict | None:
@@ -187,6 +209,9 @@ class BaseAgent(ABC):
         if not self._use_proxy or not self._proxy_mgr:
             self._log("프록시 미사용 (direct 연결)")
             return None
+        if self._current_proxy:
+            self._log(f"초기 프록시 설정: {self._current_proxy['server']}")
+            return self._current_proxy
         proxy = self._proxy_mgr.get_next()
         if proxy:
             self._current_proxy = proxy
@@ -290,7 +315,7 @@ class BaseAgent(ABC):
                         if self._proxy_fail_count >= self._PROXY_ROTATE_THRESHOLD:
                             self._log(
                                 f"HTTP {resp.status} @ "
-                                f"{domain} (proxy={self._proxy_ip}) → 프록시 교체 시도"
+                                f"{domain} → 프록시 교체 시도"
                             )
                             if self._rotate_proxy():
                                 self._proxy_fail_count = 0
@@ -301,7 +326,7 @@ class BaseAgent(ABC):
                     )
                     self._log(
                         f"HTTP {resp.status} @ "
-                        f"{domain} (proxy={self._proxy_ip}) → {wait_secs:.0f}초 대기 "
+                        f"{domain} → {wait_secs:.0f}초 대기 "
                         f"({attempt + 1}/{max_retries})"
                     )
                     self._record_failure(
@@ -319,7 +344,7 @@ class BaseAgent(ABC):
                 if resp and resp.status == 403 and self._use_proxy:
                     self._log(
                         f"HTTP 403 @ "
-                        f"{domain} (proxy={self._proxy_ip}) → 프록시 교체 시도"
+                        f"{domain} → 프록시 교체 시도"
                     )
                     self._record_failure(
                         "http_block",
@@ -350,7 +375,7 @@ class BaseAgent(ABC):
                         if self._use_proxy:
                             self._log(
                                 f"HTTP 200 소프트 차단 @ "
-                                f"{domain} (proxy={self._proxy_ip}) → 프록시 교체 시도"
+                                f"{domain} → 프록시 교체 시도"
                             )
                             if self._rotate_proxy():
                                 # 캐시 무효화 (새 프록시로 재시도)
@@ -577,11 +602,10 @@ class BaseAgent(ABC):
 
             if result and result.get("blocked"):
                 reason = result.get("reason", "unknown")
-                proxy_info = f", proxy={self._proxy_ip}" if self._use_proxy else ""
                 self._log(
                     f"소프트 차단 감지: {reason} "
                     f"(text={result.get('textLen', 0)}자, "
-                    f"img={result.get('images', 0)}개{proxy_info})"
+                    f"img={result.get('images', 0)}개)"
                 )
                 return True
 
@@ -773,7 +797,7 @@ class BaseAgent(ABC):
                             _retry_count=_retry_count + 1,
                         )
                 status = resp.status if resp else "N/A"
-                self._log(f"로그인 페이지 차단됨 (HTTP {status}, proxy={self._proxy_ip})")
+                self._log(f"로그인 페이지 차단됨 (HTTP {status})")
                 self._record_failure(
                     "login_fail",
                     f"로그인 페이지 차단 (HTTP {status})",

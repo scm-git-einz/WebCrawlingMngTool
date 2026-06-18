@@ -291,7 +291,7 @@ function ExpandedDetail({ detail }) {
 
 /* ── product: 매장 상품 결과 ────────────────────── */
 function ProductDetail({ detail }) {
-  const products = detail.products || []
+  const products = detail.items || []
   const storeInfo = detail.store_info || {}
   const storeName = storeInfo.store_name || storeInfo.name || ''
   const hasStore = storeName && storeName !== 'N/A'
@@ -459,7 +459,7 @@ function ProductDetail({ detail }) {
 
 /* ── news: 뉴스 기사 결과 ──────────────────────── */
 function NewsDetail({ detail }) {
-  const articles = detail.products || []
+  const articles = detail.items || []
 
   // 키워드별 그룹핑
   const byKeyword = {}
@@ -528,7 +528,7 @@ function NewsDetail({ detail }) {
 
 /* ── cafe: 카페 게시글 + 가격 결과 ──────────────── */
 function CafeDetail({ detail }) {
-  const products = detail.products || []
+  const products = detail.items || []
 
   // 가격 정보 추출
   const allPrices = []
@@ -648,7 +648,7 @@ function CafeDetail({ detail }) {
 
 /* ── promotion: 이벤트/프로모션 결과 ──────────────── */
 function PromotionDetail({ detail }) {
-  const events = detail.products || []
+  const events = detail.items || []
   const storeInfo = detail.store_info || {}
   const storeName = storeInfo.store_name || ''
 
@@ -816,7 +816,7 @@ function PromotionDetail({ detail }) {
 
 /* ── banner: 배너/비주얼 결과 ───────────────────── */
 function BannerDetail({ detail }) {
-  const banners = detail.products || []
+  const banners = detail.items || []
   const storeInfo = detail.store_info || {}
   const storeName = storeInfo.store_name || storeInfo.name || ''
 
@@ -884,7 +884,7 @@ function BannerDetail({ detail }) {
 
 /* ── directory: 브랜드/이벤트 목록 결과 ─────────── */
 function DirectoryDetail({ detail }) {
-  const items = detail.products || []
+  const items = detail.items || []
   const storeInfo = detail.store_info || {}
   const storeName = storeInfo.store_name || storeInfo.name || ''
 
@@ -1017,7 +1017,7 @@ function orderRowFields(r) {
 }
 
 function OrderDetail({ detail }) {
-  const results = detail.products || []
+  const results = detail.items || []
   const storeInfo = detail.store_info || {}
   const successCount = storeInfo.success_count ?? results.filter(r => {
     const f = orderRowFields(r)
@@ -1122,7 +1122,7 @@ function OrderDetail({ detail }) {
 
 /* ── coupon: 쿠폰 다운로드 결과 ────────────────────── */
 function CouponDetail({ detail }) {
-  const results = detail.products || []
+  const results = detail.items || []
   const summary = detail.store_info || {}
   const eventCount = summary.event_coupons_downloaded || 0
   const detailCount = summary.detail_coupons_downloaded || 0
