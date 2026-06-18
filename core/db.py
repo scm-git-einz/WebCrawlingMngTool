@@ -1,5 +1,5 @@
 """
-SQLite DB 연동 모듈
+PostgreSQL DB 연동 모듈
 
 테이블:
   - crawl_sites:           현업 담당자가 등록하는 수집 대상 사이트
@@ -12,24 +12,36 @@ SQLite DB 연동 모듈
 """
 import json
 import os
-import sqlite3
 from datetime import datetime
 
-# DB 파일 기본 경로
-_DEFAULT_DB_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "data", "crawling.db",
-)
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# PostgreSQL 연결 기본값
+_DEFAULT_PG = {
+    "host": os.getenv("DB_HOST", "10.149.67.179"),
+    "port": int(os.getenv("DB_PORT", "5432")),
+    "dbname": os.getenv("DB_NAME", "aops"),
+    "user": os.getenv("DB_USER", "postgres"),
+    "password": os.getenv("DB_PASSWORD", ""),
+}
 
 
 class CrawlDB:
-    """크롤링 SQLite DB 관리 클래스"""
+    """크롤링 PostgreSQL DB 관리 클래스"""
 
-    def __init__(self, db_path: str | None = None):
-        self.db_path = db_path or _DEFAULT_DB_PATH
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        self.conn = sqlite3.connect(self.db_path)
-        self.conn.row_factory = sqlite3.Row
+    def __init__(self, pg_params: dict | None = None):
+        params = pg_params or _DEFAULT_PG
+        self.conn = psycopg2.connect(**params)
+
         self._create_tables()
+
+    def _cur(self):
+        """RealDictCursor를 반환한다."""
+        return self.conn.cursor(cursor_factory=RealDictCursor)
 
     def close(self):
         """DB 연결을 닫는다."""
@@ -41,23 +53,23 @@ class CrawlDB:
     # ═══════════════════════════════════════════════════════════════
 
     def _create_tables(self):
-        cur = self.conn.cursor()
+        cur = self._cur()
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS platforms (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                id           SERIAL PRIMARY KEY,
                 name         TEXT    NOT NULL UNIQUE,
                 display_name TEXT    NOT NULL,
                 detection    TEXT    NOT NULL DEFAULT '{}',
                 browser      TEXT    NOT NULL DEFAULT '{}',
                 is_active    INTEGER NOT NULL DEFAULT 1,
-                created_at   TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+                created_at   TIMESTAMP NOT NULL DEFAULT NOW()
             )
         """)
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS extraction_templates (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                id           SERIAL PRIMARY KEY,
                 platform_id  INTEGER NOT NULL,
                 target       TEXT    NOT NULL,
                 strategy     TEXT    NOT NULL,
@@ -69,15 +81,15 @@ class CrawlDB:
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS crawl_sites (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                id           SERIAL PRIMARY KEY,
                 site_name    TEXT    NOT NULL,
                 site_url     TEXT    NOT NULL,
                 is_active    INTEGER NOT NULL DEFAULT 1,
                 platform_id  INTEGER,
                 agent_type   TEXT    NOT NULL DEFAULT 'product',
                 crawl_config TEXT    NOT NULL DEFAULT '{}',
-                created_at   TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
-                updated_at   TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+                created_at   TIMESTAMP NOT NULL DEFAULT NOW(),
+                updated_at   TIMESTAMP NOT NULL DEFAULT NOW(),
                 FOREIGN KEY (platform_id) REFERENCES platforms(id)
             )
         """)
@@ -87,11 +99,11 @@ class CrawlDB:
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS news_keywords (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                id           SERIAL PRIMARY KEY,
                 site_id      INTEGER NOT NULL,
                 keyword      TEXT    NOT NULL,
                 is_active    INTEGER NOT NULL DEFAULT 1,
-                created_at   TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+                created_at   TIMESTAMP NOT NULL DEFAULT NOW(),
                 FOREIGN KEY (site_id) REFERENCES crawl_sites(id),
                 UNIQUE(site_id, keyword)
             )
@@ -99,9 +111,9 @@ class CrawlDB:
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS crawl_results (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                id            SERIAL PRIMARY KEY,
                 site_id       INTEGER NOT NULL,
-                crawl_date    TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+                crawl_date    TIMESTAMP NOT NULL DEFAULT NOW(),
                 status        TEXT    NOT NULL DEFAULT 'pending',
                 store_info    TEXT,
                 products      TEXT,
@@ -114,7 +126,7 @@ class CrawlDB:
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS ocr_usage_log (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                id            SERIAL PRIMARY KEY,
                 site_id       INTEGER NOT NULL,
                 post_id       TEXT,
                 image_url     TEXT,
@@ -124,21 +136,21 @@ class CrawlDB:
                 price_count   INTEGER NOT NULL DEFAULT 0,
                 elapsed_ms    INTEGER NOT NULL DEFAULT 0,
                 error_msg     TEXT,
-                created_at    TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+                created_at    TIMESTAMP NOT NULL DEFAULT NOW(),
                 FOREIGN KEY (site_id) REFERENCES crawl_sites(id)
             )
         """)
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS site_credentials (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                id           SERIAL PRIMARY KEY,
                 site_id      INTEGER NOT NULL,
                 login_id     TEXT    NOT NULL,
                 login_pwd    TEXT    NOT NULL,
                 label        TEXT    NOT NULL DEFAULT '',
                 is_active    INTEGER NOT NULL DEFAULT 1,
-                last_used_at TEXT,
-                created_at   TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+                last_used_at TIMESTAMP,
+                created_at   TIMESTAMP NOT NULL DEFAULT NOW(),
                 FOREIGN KEY (site_id) REFERENCES crawl_sites(id)
             )
         """)
@@ -148,8 +160,11 @@ class CrawlDB:
     def _migrate_crawl_sites(self, cur):
         """기존 crawl_sites 테이블에 새 컬럼이 없으면 추가한다."""
         try:
-            cur.execute("PRAGMA table_info(crawl_sites)")
-            columns = {row[1] for row in cur.fetchall()}
+            cur.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'crawl_sites' AND table_schema = 'public'
+            """)
+            columns = {row["column_name"] for row in cur.fetchall()}
 
             if "crawl_config" not in columns:
                 cur.execute(
@@ -181,7 +196,7 @@ class CrawlDB:
 
             self.conn.commit()
         except Exception:
-            pass  # 이미 존재하면 무시
+            self.conn.rollback()
 
     # ═══════════════════════════════════════════════════════════════
     # crawl_sites CRUD
@@ -193,11 +208,11 @@ class CrawlDB:
         crawl_config: dict | None = None,
     ) -> int:
         """사이트를 등록하고 생성된 ID 를 반환한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
             "INSERT INTO crawl_sites "
             "(site_name, site_url, agent_type, crawl_config) "
-            "VALUES (?, ?, ?, ?)",
+            "VALUES (%s, %s, %s, %s) RETURNING id",
             (
                 site_name,
                 site_url,
@@ -206,11 +221,11 @@ class CrawlDB:
             ),
         )
         self.conn.commit()
-        return cur.lastrowid
+        return cur.fetchone()["id"]
 
     def get_active_sites(self) -> list[dict]:
         """활성 상태인 사이트 목록을 반환한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
             "SELECT * FROM crawl_sites WHERE is_active = 1 ORDER BY id",
         )
@@ -218,40 +233,40 @@ class CrawlDB:
 
     def get_site(self, site_id: int) -> dict | None:
         """ID 로 사이트 정보를 반환한다."""
-        cur = self.conn.cursor()
-        cur.execute("SELECT * FROM crawl_sites WHERE id = ?", (site_id,))
+        cur = self._cur()
+        cur.execute("SELECT * FROM crawl_sites WHERE id = %s", (site_id,))
         row = cur.fetchone()
         return dict(row) if row else None
 
     def get_all_sites(self) -> list[dict]:
         """모든 사이트 목록을 반환한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute("SELECT * FROM crawl_sites ORDER BY id")
         return [dict(row) for row in cur.fetchall()]
 
     def update_site_platform(self, site_id: int, platform_id: int):
         """사이트에 플랫폼을 연결한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
-            "UPDATE crawl_sites SET platform_id = ?, updated_at = ? WHERE id = ?",
+            "UPDATE crawl_sites SET platform_id = %s, updated_at = %s WHERE id = %s",
             (platform_id, _now(), site_id),
         )
         self.conn.commit()
 
     def deactivate_site(self, site_id: int):
         """사이트를 비활성화한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
-            "UPDATE crawl_sites SET is_active = 0, updated_at = ? WHERE id = ?",
+            "UPDATE crawl_sites SET is_active = 0, updated_at = %s WHERE id = %s",
             (_now(), site_id),
         )
         self.conn.commit()
 
     def activate_site(self, site_id: int):
         """사이트를 활성화한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
-            "UPDATE crawl_sites SET is_active = 1, updated_at = ? WHERE id = ?",
+            "UPDATE crawl_sites SET is_active = 1, updated_at = %s WHERE id = %s",
             (_now(), site_id),
         )
         self.conn.commit()
@@ -269,28 +284,28 @@ class CrawlDB:
 
     def update_crawl_config(self, site_id: int, crawl_config: dict):
         """사이트의 crawl_config 를 업데이트한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
-            "UPDATE crawl_sites SET crawl_config = ?, updated_at = ? WHERE id = ?",
+            "UPDATE crawl_sites SET crawl_config = %s, updated_at = %s WHERE id = %s",
             (json.dumps(crawl_config, ensure_ascii=False), _now(), site_id),
         )
         self.conn.commit()
 
     def update_site_agent_type(self, site_id: int, agent_type: str):
         """사이트의 agent_type 을 업데이트한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
-            "UPDATE crawl_sites SET agent_type = ?, updated_at = ? WHERE id = ?",
+            "UPDATE crawl_sites SET agent_type = %s, updated_at = %s WHERE id = %s",
             (agent_type, _now(), site_id),
         )
         self.conn.commit()
 
     def get_active_sites_by_agent(self, agent_type: str) -> list[dict]:
         """특정 에이전트 타입의 활성 사이트 목록을 반환한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
             "SELECT * FROM crawl_sites "
-            "WHERE is_active = 1 AND agent_type = ? ORDER BY id",
+            "WHERE is_active = 1 AND agent_type = %s ORDER BY id",
             (agent_type,),
         )
         return [dict(row) for row in cur.fetchall()]
@@ -307,10 +322,10 @@ class CrawlDB:
           {"name": "...", "display_name": "...",
            "detection": {...}, "browser": {...}}
         """
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
             "INSERT INTO platforms (name, display_name, detection, browser) "
-            "VALUES (?, ?, ?, ?)",
+            "VALUES (%s, %s, %s, %s) RETURNING id",
             (
                 platform_data["name"],
                 platform_data.get("display_name", platform_data["name"]),
@@ -319,12 +334,12 @@ class CrawlDB:
             ),
         )
         self.conn.commit()
-        return cur.lastrowid
+        return cur.fetchone()["id"]
 
     def get_platform(self, platform_id: int) -> dict | None:
         """ID 로 플랫폼 정보를 반환한다. JSON 필드는 파싱하여 반환."""
-        cur = self.conn.cursor()
-        cur.execute("SELECT * FROM platforms WHERE id = ?", (platform_id,))
+        cur = self._cur()
+        cur.execute("SELECT * FROM platforms WHERE id = %s", (platform_id,))
         row = cur.fetchone()
         if not row:
             return None
@@ -335,8 +350,8 @@ class CrawlDB:
 
     def get_platform_by_name(self, name: str) -> dict | None:
         """이름으로 플랫폼 정보를 반환한다."""
-        cur = self.conn.cursor()
-        cur.execute("SELECT * FROM platforms WHERE name = ?", (name,))
+        cur = self._cur()
+        cur.execute("SELECT * FROM platforms WHERE name = %s", (name,))
         row = cur.fetchone()
         if not row:
             return None
@@ -347,7 +362,7 @@ class CrawlDB:
 
     def get_all_platforms(self) -> list[dict]:
         """모든 플랫폼 목록을 반환한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute("SELECT * FROM platforms WHERE is_active = 1 ORDER BY id")
         result = []
         for row in cur.fetchall():
@@ -418,11 +433,11 @@ class CrawlDB:
 
     def add_template(self, platform_id: int, template_data: dict) -> int:
         """추출 템플릿을 등록하고 생성된 ID 를 반환한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
             "INSERT INTO extraction_templates "
             "(platform_id, target, strategy, config, priority) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
             (
                 platform_id,
                 template_data["target"],
@@ -432,14 +447,14 @@ class CrawlDB:
             ),
         )
         self.conn.commit()
-        return cur.lastrowid
+        return cur.fetchone()["id"]
 
     def get_templates_for_platform(self, platform_id: int) -> list[dict]:
         """플랫폼 ID 로 추출 템플릿 목록을 반환한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
             "SELECT * FROM extraction_templates "
-            "WHERE platform_id = ? ORDER BY target, priority DESC",
+            "WHERE platform_id = %s ORDER BY target, priority DESC",
             (platform_id,),
         )
         result = []
@@ -451,10 +466,10 @@ class CrawlDB:
 
     def get_template(self, platform_id: int, target: str) -> dict | None:
         """플랫폼 + 대상으로 최우선 템플릿을 반환한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
             "SELECT * FROM extraction_templates "
-            "WHERE platform_id = ? AND target = ? ORDER BY priority DESC LIMIT 1",
+            "WHERE platform_id = %s AND target = %s ORDER BY priority DESC LIMIT 1",
             (platform_id, target),
         )
         row = cur.fetchone()
@@ -466,9 +481,9 @@ class CrawlDB:
 
     def delete_templates_for_platform(self, platform_id: int):
         """플랫폼의 기존 템플릿을 모두 삭제한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
-            "DELETE FROM extraction_templates WHERE platform_id = ?",
+            "DELETE FROM extraction_templates WHERE platform_id = %s",
             (platform_id,),
         )
         self.conn.commit()
@@ -479,13 +494,13 @@ class CrawlDB:
 
     def create_result(self, site_id: int) -> int:
         """수집 결과 레코드를 생성하고 ID 를 반환한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
-            "INSERT INTO crawl_results (site_id, status) VALUES (?, 'running')",
+            "INSERT INTO crawl_results (site_id, status) VALUES (%s, 'running') RETURNING id",
             (site_id,),
         )
         self.conn.commit()
-        return cur.lastrowid
+        return cur.fetchone()["id"]
 
     def update_result(
         self,
@@ -498,12 +513,12 @@ class CrawlDB:
         elapsed_sec: float | None = None,
     ):
         """수집 결과를 업데이트한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
             "UPDATE crawl_results SET "
-            "status = ?, store_info = ?, products = ?, "
-            "product_count = ?, error_msg = ?, elapsed_sec = ? "
-            "WHERE id = ?",
+            "status = %s, store_info = %s, products = %s, "
+            "product_count = %s, error_msg = %s, elapsed_sec = %s "
+            "WHERE id = %s",
             (
                 status,
                 json.dumps(store_info, ensure_ascii=False) if store_info else None,
@@ -518,10 +533,10 @@ class CrawlDB:
 
     def get_latest_result(self, site_id: int) -> dict | None:
         """사이트의 최신 수집 결과를 반환한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
             "SELECT * FROM crawl_results "
-            "WHERE site_id = ? ORDER BY crawl_date DESC LIMIT 1",
+            "WHERE site_id = %s ORDER BY crawl_date DESC LIMIT 1",
             (site_id,),
         )
         row = cur.fetchone()
@@ -543,28 +558,27 @@ class CrawlDB:
         이미 존재하면 활성화하고, 신규이면 INSERT 한다.
         Returns: keyword id (신규) 또는 None (이미 존재)
         """
-        cur = self.conn.cursor()
-        # 이미 존재하는지 확인
+        cur = self._cur()
         cur.execute(
             "SELECT id, is_active FROM news_keywords "
-            "WHERE site_id = ? AND keyword = ?",
+            "WHERE site_id = %s AND keyword = %s",
             (site_id, keyword),
         )
         row = cur.fetchone()
         if row:
             if not row["is_active"]:
                 cur.execute(
-                    "UPDATE news_keywords SET is_active = 1 WHERE id = ?",
+                    "UPDATE news_keywords SET is_active = 1 WHERE id = %s",
                     (row["id"],),
                 )
                 self.conn.commit()
             return None  # 이미 존재
         cur.execute(
-            "INSERT INTO news_keywords (site_id, keyword) VALUES (?, ?)",
+            "INSERT INTO news_keywords (site_id, keyword) VALUES (%s, %s) RETURNING id",
             (site_id, keyword),
         )
         self.conn.commit()
-        return cur.lastrowid
+        return cur.fetchone()["id"]
 
     def add_keywords(self, site_id: int, keywords: list[str]) -> int:
         """
@@ -584,9 +598,9 @@ class CrawlDB:
 
     def remove_keyword(self, site_id: int, keyword: str) -> bool:
         """뉴스 키워드를 삭제한다. 삭제 성공 여부를 반환한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
-            "DELETE FROM news_keywords WHERE site_id = ? AND keyword = ?",
+            "DELETE FROM news_keywords WHERE site_id = %s AND keyword = %s",
             (site_id, keyword),
         )
         self.conn.commit()
@@ -594,20 +608,20 @@ class CrawlDB:
 
     def get_keywords(self, site_id: int) -> list[dict]:
         """사이트의 모든 뉴스 키워드를 반환한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
             "SELECT * FROM news_keywords "
-            "WHERE site_id = ? ORDER BY id",
+            "WHERE site_id = %s ORDER BY id",
             (site_id,),
         )
         return [dict(row) for row in cur.fetchall()]
 
     def get_active_keywords(self, site_id: int) -> list[str]:
         """사이트의 활성 뉴스 키워드 문자열 목록을 반환한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
             "SELECT keyword FROM news_keywords "
-            "WHERE site_id = ? AND is_active = 1 ORDER BY id",
+            "WHERE site_id = %s AND is_active = 1 ORDER BY id",
             (site_id,),
         )
         return [row["keyword"] for row in cur.fetchall()]
@@ -616,10 +630,10 @@ class CrawlDB:
         self, site_id: int, keyword: str, is_active: bool,
     ) -> bool:
         """키워드의 활성/비활성 상태를 변경한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
-            "UPDATE news_keywords SET is_active = ? "
-            "WHERE site_id = ? AND keyword = ?",
+            "UPDATE news_keywords SET is_active = %s "
+            "WHERE site_id = %s AND keyword = %s",
             (1 if is_active else 0, site_id, keyword),
         )
         self.conn.commit()
@@ -651,31 +665,31 @@ class CrawlDB:
         self, site_id: int, login_id: str, login_pwd: str, label: str = "",
     ) -> int:
         """로그인 계정을 등록하고 생성된 ID를 반환한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
             "INSERT INTO site_credentials (site_id, login_id, login_pwd, label) "
-            "VALUES (?, ?, ?, ?)",
+            "VALUES (%s, %s, %s, %s) RETURNING id",
             (site_id, login_id, login_pwd, label),
         )
         self.conn.commit()
-        return cur.lastrowid
+        return cur.fetchone()["id"]
 
     def get_credentials(self, site_id: int) -> list[dict]:
         """사이트의 모든 로그인 계정을 반환한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
             "SELECT * FROM site_credentials "
-            "WHERE site_id = ? ORDER BY id",
+            "WHERE site_id = %s ORDER BY id",
             (site_id,),
         )
         return [dict(row) for row in cur.fetchall()]
 
     def get_active_credentials(self, site_id: int) -> list[dict]:
         """사이트의 활성 로그인 계정 목록을 반환한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
             "SELECT * FROM site_credentials "
-            "WHERE site_id = ? AND is_active = 1 "
+            "WHERE site_id = %s AND is_active = 1 "
             "ORDER BY last_used_at ASC NULLS FIRST, id ASC",
             (site_id,),
         )
@@ -685,10 +699,10 @@ class CrawlDB:
         self, cred_id: int, login_id: str, login_pwd: str, label: str = "",
     ) -> bool:
         """로그인 계정 정보를 수정한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
             "UPDATE site_credentials "
-            "SET login_id = ?, login_pwd = ?, label = ? WHERE id = ?",
+            "SET login_id = %s, login_pwd = %s, label = %s WHERE id = %s",
             (login_id, login_pwd, label, cred_id),
         )
         self.conn.commit()
@@ -696,23 +710,23 @@ class CrawlDB:
 
     def delete_credential(self, cred_id: int) -> bool:
         """로그인 계정을 삭제한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
-            "DELETE FROM site_credentials WHERE id = ?", (cred_id,),
+            "DELETE FROM site_credentials WHERE id = %s", (cred_id,),
         )
         self.conn.commit()
         return cur.rowcount > 0
 
     def toggle_credential(self, cred_id: int) -> dict | None:
         """로그인 계정의 활성/비활성을 토글한다."""
-        cur = self.conn.cursor()
-        cur.execute("SELECT id, is_active FROM site_credentials WHERE id = ?", (cred_id,))
+        cur = self._cur()
+        cur.execute("SELECT id, is_active FROM site_credentials WHERE id = %s", (cred_id,))
         row = cur.fetchone()
         if not row:
             return None
         new_active = 0 if row["is_active"] else 1
         cur.execute(
-            "UPDATE site_credentials SET is_active = ? WHERE id = ?",
+            "UPDATE site_credentials SET is_active = %s WHERE id = %s",
             (new_active, cred_id),
         )
         self.conn.commit()
@@ -720,9 +734,9 @@ class CrawlDB:
 
     def mark_credential_used(self, cred_id: int):
         """로그인 계정 사용 시각을 갱신한다."""
-        cur = self.conn.cursor()
+        cur = self._cur()
         cur.execute(
-            "UPDATE site_credentials SET last_used_at = ? WHERE id = ?",
+            "UPDATE site_credentials SET last_used_at = %s WHERE id = %s",
             (_now(), cred_id),
         )
         self.conn.commit()
@@ -743,28 +757,13 @@ class CrawlDB:
         elapsed_ms: int = 0,
         error_msg: str = "",
     ) -> int:
-        """OCR/Document Parser 사용 이력을 기록한다.
-
-        Args:
-            site_id: 사이트 ID
-            engine: 사용한 엔진 ("document-parse" | "tesseract")
-            status: 결과 상태 ("success" | "fail" | "rate_limit")
-            post_id: 게시글 ID
-            image_url: 이미지 URL
-            text_length: 추출된 텍스트 길이
-            price_count: 추출된 가격 수
-            elapsed_ms: 처리 시간 (ms)
-            error_msg: 에러 메시지
-
-        Returns:
-            생성된 로그 ID
-        """
-        cur = self.conn.cursor()
+        """OCR/Document Parser 사용 이력을 기록한다."""
+        cur = self._cur()
         cur.execute(
             "INSERT INTO ocr_usage_log "
             "(site_id, post_id, image_url, engine, status, "
             " text_length, price_count, elapsed_ms, error_msg) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (
                 site_id,
                 post_id,
@@ -778,7 +777,7 @@ class CrawlDB:
             ),
         )
         self.conn.commit()
-        return cur.lastrowid
+        return cur.fetchone()["id"]
 
     def get_ocr_usage_summary(self, site_id: int = 0) -> list[dict]:
         """OCR 사용 이력 요약을 반환한다.
@@ -789,21 +788,21 @@ class CrawlDB:
         Returns:
             엔진별 집계 [{engine, total, success, fail, rate_limit, ...}]
         """
-        cur = self.conn.cursor()
-        where = "WHERE site_id = ?" if site_id else ""
+        cur = self._cur()
+        where = "WHERE site_id = %s" if site_id else ""
         params = (site_id,) if site_id else ()
         cur.execute(f"""
             SELECT
                 engine,
-                COUNT(*)                                    AS total,
-                SUM(CASE WHEN status='success' THEN 1 ELSE 0 END)    AS success_count,
-                SUM(CASE WHEN status='fail' THEN 1 ELSE 0 END)       AS fail_count,
+                COUNT(*)                                             AS total,
+                SUM(CASE WHEN status='success' THEN 1 ELSE 0 END)   AS success_count,
+                SUM(CASE WHEN status='fail' THEN 1 ELSE 0 END)      AS fail_count,
                 SUM(CASE WHEN status='rate_limit' THEN 1 ELSE 0 END) AS rate_limit_count,
-                SUM(text_length)                            AS total_text_length,
-                SUM(price_count)                            AS total_price_count,
-                ROUND(AVG(elapsed_ms))                      AS avg_elapsed_ms,
-                MIN(created_at)                             AS first_used,
-                MAX(created_at)                             AS last_used
+                SUM(text_length)                                     AS total_text_length,
+                SUM(price_count)                                     AS total_price_count,
+                ROUND(AVG(elapsed_ms))                               AS avg_elapsed_ms,
+                MIN(created_at)                                      AS first_used,
+                MAX(created_at)                                      AS last_used
             FROM ocr_usage_log
             {where}
             GROUP BY engine
@@ -815,14 +814,14 @@ class CrawlDB:
         self, site_id: int = 0, limit: int = 100,
     ) -> list[dict]:
         """OCR 사용 이력 상세를 반환한다."""
-        cur = self.conn.cursor()
-        where = "WHERE site_id = ?" if site_id else ""
+        cur = self._cur()
+        where = "WHERE site_id = %s" if site_id else ""
         params = (site_id, limit) if site_id else (limit,)
         cur.execute(f"""
             SELECT * FROM ocr_usage_log
             {where}
             ORDER BY id DESC
-            LIMIT ?
+            LIMIT %s
         """, params)
         return [dict(row) for row in cur.fetchall()]
 
@@ -848,10 +847,10 @@ class CrawlDB:
             # 기존 템플릿 교체
             self.delete_templates_for_platform(platform_id)
             # browser / detection 설정도 최신으로 갱신
-            cur = self.conn.cursor()
+            cur = self._cur()
             cur.execute(
-                "UPDATE platforms SET browser = ?, detection = ? "
-                "WHERE id = ?",
+                "UPDATE platforms SET browser = %s, detection = %s "
+                "WHERE id = %s",
                 (
                     json.dumps(
                         platform_data.get("browser", {}),
@@ -882,5 +881,5 @@ class CrawlDB:
 
 # ─── 유틸 ────────────────────────────────────────────────────────
 
-def _now() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def _now() -> datetime:
+    return datetime.now()

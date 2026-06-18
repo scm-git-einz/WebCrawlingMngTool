@@ -14,25 +14,25 @@ def _db():
 def dashboard_stats():
     db = _db()
     try:
-        cur = db.conn.cursor()
+        cur = db._cur()
 
-        cur.execute("SELECT COUNT(*) FROM crawl_sites")
-        total_sites = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) AS cnt FROM crawl_sites")
+        total_sites = cur.fetchone()["cnt"]
 
-        cur.execute("SELECT COUNT(*) FROM crawl_sites WHERE is_active = 1")
-        active_sites = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) AS cnt FROM crawl_sites WHERE is_active = 1")
+        active_sites = cur.fetchone()["cnt"]
 
-        cur.execute("SELECT COUNT(*) FROM crawl_results")
-        total_crawls = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) AS cnt FROM crawl_results")
+        total_crawls = cur.fetchone()["cnt"]
 
         cur.execute(
-            "SELECT COUNT(*) FROM crawl_results WHERE status = 'success'"
+            "SELECT COUNT(*) AS cnt FROM crawl_results WHERE status = 'success'"
         )
-        success_crawls = cur.fetchone()[0]
+        success_crawls = cur.fetchone()["cnt"]
 
-        cur.execute("SELECT SUM(product_count) FROM crawl_results WHERE status = 'success'")
+        cur.execute("SELECT SUM(product_count) AS total FROM crawl_results WHERE status = 'success'")
         row = cur.fetchone()
-        total_products = row[0] or 0
+        total_products = row["total"] or 0
 
         # ── 사이트별 최신 수집 현황 (카테고리별 그룹) ──
         cur.execute("""
@@ -81,7 +81,7 @@ def list_results(
 ):
     db = _db()
     try:
-        cur = db.conn.cursor()
+        cur = db._cur()
         if site_id:
             cur.execute("""
                 SELECT r.id, r.site_id, s.site_name, s.agent_type, s.category,
@@ -89,9 +89,9 @@ def list_results(
                        r.product_count, r.elapsed_sec, r.error_msg
                 FROM crawl_results r
                 JOIN crawl_sites s ON r.site_id = s.id
-                WHERE r.site_id = ?
+                WHERE r.site_id = %s
                 ORDER BY r.crawl_date DESC
-                LIMIT ?
+                LIMIT %s
             """, (site_id, limit))
         else:
             cur.execute("""
@@ -101,7 +101,7 @@ def list_results(
                 FROM crawl_results r
                 JOIN crawl_sites s ON r.site_id = s.id
                 ORDER BY r.crawl_date DESC
-                LIMIT ?
+                LIMIT %s
             """, (limit,))
         return [dict(row) for row in cur.fetchall()]
     finally:
@@ -112,12 +112,12 @@ def list_results(
 def get_result_detail(result_id: int):
     db = _db()
     try:
-        cur = db.conn.cursor()
+        cur = db._cur()
         cur.execute("""
             SELECT r.*, s.site_name, s.site_url, s.agent_type, s.category, s.crawl_config
             FROM crawl_results r
             JOIN crawl_sites s ON r.site_id = s.id
-            WHERE r.id = ?
+            WHERE r.id = %s
         """, (result_id,))
         row = cur.fetchone()
         if not row:

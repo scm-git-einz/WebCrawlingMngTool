@@ -44,7 +44,8 @@ class LocalDispatcher(BaseAgent):
             print(f"{self._TAG} site_id={site_id} 를 찾을 수 없음")
             return
 
-        config     = json.loads(site.get("crawl_config") or "{}")
+        raw = site.get("crawl_config") or {}
+        config = raw if isinstance(raw, dict) else json.loads(raw)
         local_type = config.get("local_type", "")
 
         _load_local_map()

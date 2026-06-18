@@ -59,7 +59,7 @@ def _site_to_dict(row) -> dict:
 def list_sites():
     db = _db()
     try:
-        cur = db.conn.cursor()
+        cur = db._cur()
         cur.execute("""
             SELECT id, site_name, site_url, is_active, platform_id,
                    agent_type, crawl_config, category, crawl_schedule,
@@ -76,7 +76,7 @@ def list_sites():
 def list_categories():
     db = _db()
     try:
-        cur = db.conn.cursor()
+        cur = db._cur()
         cur.execute("""
             SELECT category, COUNT(*) as cnt,
                    SUM(CASE WHEN is_active=1 THEN 1 ELSE 0 END) as active_cnt
@@ -128,9 +128,9 @@ def create_site(body: SiteCreate):
             crawl_config=body.crawl_config,
         )
         if body.category:
-            cur = db.conn.cursor()
+            cur = db._cur()
             cur.execute(
-                "UPDATE crawl_sites SET category=? WHERE id=?",
+                "UPDATE crawl_sites SET category=%s WHERE id=%s",
                 (body.category, site_id),
             )
             db.conn.commit()
@@ -146,7 +146,7 @@ def update_site(site_id: int, body: SiteUpdate):
         site = db.get_site(site_id)
         if not site:
             raise HTTPException(404, "사이트를 찾을 수 없습니다")
-        cur = db.conn.cursor()
+        cur = db._cur()
         updates = []
         params = []
         if body.site_name is not None:
@@ -317,7 +317,7 @@ def batch_update_schedule(body: dict):
         raise HTTPException(400, "site_ids가 필요합니다")
     db = _db()
     try:
-        cur = db.conn.cursor()
+        cur = db._cur()
         placeholders = ",".join("?" for _ in site_ids)
         cur.execute(
             f"UPDATE crawl_sites SET crawl_schedule=?, updated_at=datetime('now','localtime') "
@@ -337,7 +337,7 @@ def update_schedule(site_id: int, body: ScheduleBody):
         site = db.get_site(site_id)
         if not site:
             raise HTTPException(404, "사이트를 찾을 수 없습니다")
-        cur = db.conn.cursor()
+        cur = db._cur()
         cur.execute(
             "UPDATE crawl_sites SET crawl_schedule=?, updated_at=datetime('now','localtime') WHERE id=?",
             (body.schedule, site_id),
