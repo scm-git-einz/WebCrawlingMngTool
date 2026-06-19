@@ -22,6 +22,7 @@ from agents.banner.engine import BannerAgent
 from agents.directory.engine import DirectoryAgent
 from agents.order.engine import OrderAgent
 from agents.coupon.engine import CouponAgent
+from agents.local.dispatcher import LocalDispatcher
 
 
 AGENT_REGISTRY = {
@@ -31,8 +32,9 @@ AGENT_REGISTRY = {
     "promotion": PromotionAgent,
     "banner":    BannerAgent,
     "directory": DirectoryAgent,
-    "order": OrderAgent,
-    "coupon": CouponAgent,
+    "order":     OrderAgent,
+    "coupon":    CouponAgent,
+    "local":     LocalDispatcher,
 }
 
 

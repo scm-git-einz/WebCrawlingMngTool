@@ -160,101 +160,74 @@ agents/brand/
 
 ---
 
-## 7. Queue 아키텍처
+## 7. 작업 처리 아키텍처
 
-> 이 섹션은 Brand Agent만이 아니라 **모든 에이전트(product, news, cafe, brand 등)의 공통 큐 설계**다.
-> Brand Agent 관련 세부 사항은 7.6절 참고.
+> 이 섹션은 Brand Agent만이 아니라 **모든 에이전트(product, news, cafe, brand 등)의 공통 설계**다.
+> 세부 사항은 `core/queue/CLAUDE.md` 참고.
 
 ---
 
-### 7.1 전체 구조 — 두 개의 큐
-
-에이전트 실행 전·후로 독립된 큐가 하나씩 존재한다.
+### 7.1 전체 구조
 
 ```
 [스케줄러 / run_site()]
-        │ put(TaskMessage)
+        │ INSERT (status='pending', run_id 발급)
         ▼
+┌─────────────────────┐
+│  crawl_tasks (DB)   │  에이전트가 처리할 작업 목록 (URL / SKU / 키워드 등)
+│  status: pending    │  ← agent_type으로 필터링
+└──────────┬──────────┘
+           │ SELECT FOR UPDATE SKIP LOCKED → status = 'processing'
+           ▼
+   TaskWorker           agent_type 보고 해당 에이전트 실행
+   (task_worker.py)
+           │
+           ├─ 성공  → ingest_q.put(status='success') → status = 'done'
+           ├─ 차단  → ingest_q.put(status='blocked') → status = 'done'
+           │          (차단은 결과의 하나 — exception X, 재시도 X)
+           └─ 실패  → retry_count++ → status = 'pending' (재시도)
+                          ↓ retry_count >= MAX_RETRY(3)
+                      status = 'failed' (DLQ 없음 — DB에서 직접 관리)
+           ▼
 ┌─────────────────┐
-│   Task Queue    │  ← 에이전트가 처리할 작업 대기열 (URL / SKU / 키워드 등)
-└────────┬────────┘
-         │ get(TaskMessage)
-         ▼
-   Task Worker        ← agent_type 보고 해당 에이전트 실행
-   (각 에이전트)
-         │ put(IngestMessage)
-         ▼
-┌─────────────────┐
-│  Ingest Queue   │  ← 크롤링 결과 대기열 (AWS SQS)
+│  Ingest Queue   │  크롤링 결과 대기열 (공통 1개: ingest)
 └────────┬────────┘
          │ get(IngestMessage)
          ▼
-  Ingest Worker       ← Medallion Raw 레이어에 적재
-         │
+   IngestWorker        Raw 레이어에 적재
          ▼
-  Raw → Bronze → Silver
+   Raw → Bronze → Silver
 ```
 
-| 구간 | 현재 (로컬) | 운영 (SQS) |
-| ---- | ----------- | ---------- |
-| Task Queue | `LocalQueue` (Python `queue.Queue` 기반) | AWS SQS (agent_type별 큐) |
-| Ingest Queue | `LocalQueue` (개발 중) | AWS SQS (`ingest-queue`) |
-| DLQ | `LocalQueue` | AWS SQS DLQ |
-
-**기타 방침**
-- Redis 미사용
-- 로컬 환경: SQLite 계속 사용
-- SQS 전환 시 `QueueBackend` 서브클래스만 교체 — 에이전트 코드 무변경
+| 구간 | 방식 | 이름/위치 |
+| ---- | ---- | --------- |
+| Task | DB 테이블 | `crawl_tasks` (별도 큐 인프라 없음) |
+| Ingest Queue | Queue | `ingest` (공통 1개) |
+| DLQ | 없음 | `status='failed'`로 DB에서 직접 관리 |
 
 ---
 
-### 7.2 Queue 추상화 레이어 (`core/queue.py`)
+### 7.2 crawl_tasks 테이블
 
-모든 큐는 `QueueBackend` 인터페이스를 통해 동작한다. 로컬/SQS 구현체를 인터페이스로 분리하여 에이전트 코드가 구현체에 의존하지 않도록 한다.
-
-```python
-class QueueBackend:
-    def put(self, message: dict) -> str: ...        # message_id 반환
-    def get(self) -> tuple[str, dict] | None: ...   # (receipt_handle, message) 반환, 없으면 None
-    def ack(self, handle: str): ...                 # 처리 완료 확인 (큐에서 삭제)
-    def nack(self, handle: str, delay_sec=0): ...   # 처리 실패 (재처리 예약)
-
-class LocalQueue(QueueBackend):
-    """개발/테스트용. Python queue.Queue 기반. 프로세스 재시작 시 초기화됨."""
-
-class SQSQueue(QueueBackend):
-    """운영용. boto3 기반. 큐 이름으로 초기화."""
-    def __init__(self, queue_name: str): ...
-```
-
-큐 인스턴스는 `get_queue(name)` 팩토리 함수로 가져온다.
-
-```python
-from core.queue import get_queue
-
-task_q   = get_queue("task_brand_cartier")   # Task Queue (cartier 전용)
-ingest_q = get_queue("ingest")               # Ingest Queue
-dlq      = get_queue("dlq_ingest")           # Ingest DLQ
-```
-
----
-
-### 7.3 Task Queue — TaskMessage 스키마
-
-Task Queue에 적재하는 메시지. **모든 에이전트가 동일한 포맷을 사용**하고, `payload_type`으로 내용물 종류를 식별한다.
-
-```python
-TaskMessage = {
-    "task_id":      str,    # UUID4 — 중복 방지 / 이력 추적
-    "agent_type":   str,    # "product" | "news" | "cafe" | "brand" | "banner" | ...
-    "site_id":      int,    # crawling_sites.id
-    "payload_type": str,    # "url" | "sku" | "keyword" | "product_code" | "text"
-    "payload":      str,    # 실제 처리 값 (에이전트가 해석)
-    "metadata":     dict,   # 에이전트별 부가 정보 (자유 형식)
-    "priority":     int,    # 0이 가장 높음 (낮을수록 먼저 처리)
-    "retry_count":  int,    # 재시도 횟수 (DLQ 이동 여부 판단에 사용)
-    "created_at":   str,    # ISO8601 UTC
-}
+```sql
+CREATE TABLE IF NOT EXISTS crawl_tasks (
+    id           SERIAL PRIMARY KEY,
+    task_id      TEXT UNIQUE NOT NULL,
+    run_id       TEXT NOT NULL,          -- 실행 단위 식별자 (같은 site_id라도 실행마다 다름)
+    agent_type   TEXT NOT NULL,
+    site_id      INTEGER NOT NULL,
+    sequence_num SERIAL,                  -- DB 자동증가 — 에이전트/스케줄러가 직접 채우지 않음
+    payload_type TEXT NOT NULL,          -- "url" | "sku" | "keyword"
+    payload      TEXT NOT NULL,
+    metadata     JSONB DEFAULT '{}',     -- 에이전트별 부가 정보
+    priority     INTEGER DEFAULT 0,
+    status       TEXT DEFAULT 'pending', -- pending | processing | done | failed
+    retry_count  INTEGER DEFAULT 0,
+    picked_at    TIMESTAMPTZ,            -- 타임아웃 감지용
+    error_msg    TEXT,
+    created_at   TIMESTAMPTZ DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
 ```
 
 에이전트별 `payload_type` / `payload` / `metadata` 사용 예:
@@ -265,177 +238,51 @@ TaskMessage = {
 | brand (chanel) | `sku` | `P73001` | `{"brand_type": "chanel", "search_url_template": "https://chanel.com/search?q={sku}"}` |
 | product | `url` | `https://lotte-df.com/p/456` | `{"category": "시계"}` |
 | news | `keyword` | `"샤넬 신상품"` | `{"date_from": "2026-06-01"}` |
-| cafe | `keyword` | `"롯데면세 후기"` | `{"cafe_id": "29072709"}` |
-| directory | `url` | `https://brand.com/brands/` | `{}` |
 
 ---
 
-### 7.4 Ingest Queue — IngestMessage 스키마
-
-크롤링 결과를 Medallion Raw 레이어로 전달하는 메시지.
+### 7.3 IngestMessage 스키마
 
 ```python
 IngestMessage = {
     "ingest_id":    str,    # UUID4
-    "task_id":      str,    # 원본 TaskMessage의 task_id (추적용)
+    "task_id":      str,    # 원본 crawl_tasks의 task_id
+    "run_id":       str,    # crawl_tasks의 run_id 그대로 전달
     "agent_type":   str,
     "site_id":      int,
+    "sequence_num": int,
     "crawled_at":   str,    # ISO8601 UTC
-    "payload_type": str,    # 원본 TaskMessage의 payload_type
-    "source_url":   str,    # 실제 수집한 페이지 URL (fetch_product가 접속한 URL)
-    "data":         dict,   # 에이전트가 수집한 결과 (자유 형식 — 에이전트마다 다름)
-    "status":       str,    # "success" | "failed" | "blocked"
-    "error_msg":    str,    # 실패 시 오류 메시지 (성공 시 "")
+    "payload_type": str,
+    "source_url":   str,    # 실제 수집한 페이지 URL
+    "data":         dict,   # 에이전트가 수집한 결과
+    "status":       str,    # "success" | "blocked" ("failed" 없음 — crawl_tasks에서 관리)
+    "error_msg":    str,
 }
 ```
 
 ---
 
-### 7.5 DLQ (Dead Letter Queue)
+### 7.4 작업 적재 / 결과 push 패턴
 
-`retry_count`가 임계값(기본 `MAX_RETRY = 3`)을 초과하면 DLQ로 이동한다.
-
-```
-Task Queue 처리 실패 → retry_count++ → nack(delay_sec=60)
-                           ↓ retry_count >= MAX_RETRY
-                       DLQ(task) 이동 → queue_log(status="dlq")
-
-Ingest Queue 처리 실패 → 동일 패턴 → DLQ(ingest) 이동
-```
-
-- DLQ 모니터링: `queue_log` 테이블에서 `status='dlq'` 건수 조회
-- 수동 재처리: `scripts/replay_dlq.py` 스크립트로 DLQ → 원본 큐 재적재
-
----
-
-### 7.6 Task Queue 분리 방식
-
-Task Queue를 얼마나 잘게 나눌지에 따라 세 가지 방식이 있다. 격리 수준과 관리 복잡도가 트레이드오프다.
-
----
-
-**방식 1 — 단일 큐 (가장 단순)**
-
-```
-task 큐: [product site=1 url, brand cartier url, news site=3 kw, ...]
-                    ↓
-              TaskWorker 1개
-              agent_type + site_id 보고 처리
-```
-
-- 큐 1개, 관리 제일 단순
-- 느린 에이전트(예: brand)가 모든 다른 에이전트 작업까지 막음
-- 에이전트 타입 간 격리 없음
-
----
-
-**방식 2 — 에이전트별 큐 (권장)**
-
-```
-task_product 큐: [site=1 url, site=2 url, ...]  → ProductWorker
-task_brand   큐: [cartier url, chanel url, ...]  → BrandWorker → BrandDispatcher → CartierAgent / ChanelAgent
-task_news    큐: [site=3 kw, ...]               → NewsWorker
-...
-```
-
-- 큐 수 = agent_type 수(약 7~8개) → 관리 부담 낮음
-- 에이전트 타입 간 격리 보장 (brand가 느려도 product/news 영향 없음)
-- 같은 에이전트 타입 내 사이트 간 지연은 여전히 발생 가능 → 워커 수로 완화
-- Brand Agent는 메시지 내 `metadata.brand_type`으로 BrandDispatcher가 CartierAgent 등으로 라우팅 (기존 구조 그대로 연결)
-
----
-
-**방식 3 — 사이트별 큐 (가장 강한 격리)**
-
-```
-task_brand_cartier 큐: [url, url, ...]  → CartierAgent 전용 워커
-task_brand_chanel  큐: [url, url, ...]  → ChanelAgent 전용 워커
-task_product_1     큐: [url, url, ...]  → 롯데면세점 전용 워커
-...
-```
-
-- 사이트 간 완벽한 격리 — 한 사이트가 느려도 다른 사이트 무관
-- 큐 수 = 사이트 수 → SQS 큐 관리 비용 증가, 새 사이트 추가 시 큐도 생성 필요
-
----
-
-> **현재 결정**: 방식 2 (에이전트별 큐) 채택.
-> 관리 단순성과 에이전트 타입 간 격리를 동시에 확보하고,
-> 기존 BrandDispatcher 구조와 자연스럽게 연결됨.
-
----
-
-### 7.7 큐 이력 로깅 (`core/queue_log.py`)
-
-큐 메시지의 상태 변화를 SQLite `queue_log` 테이블에 기록한다. 큐 작업 시 반드시 로깅해야 한다.
-
-```sql
-CREATE TABLE IF NOT EXISTS queue_log (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    queue_name   TEXT    NOT NULL,   -- 'task_brand_cartier' | 'ingest' | 'dlq_ingest' 등
-    message_id   TEXT    NOT NULL,   -- task_id 또는 ingest_id
-    agent_type   TEXT,
-    site_id      INTEGER,
-    status       TEXT    NOT NULL,   -- enqueued | dequeued | acked | failed | dlq
-    retry_count  INTEGER DEFAULT 0,
-    error_msg    TEXT,
-    created_at   TEXT    NOT NULL,   -- ISO8601 UTC
-    updated_at   TEXT    NOT NULL    -- ISO8601 UTC
-);
-```
-
-상태 전이:
-
-```
-put()  → status = "enqueued"
-get()  → status = "dequeued"
-ack()  → status = "acked"       (정상 처리 완료)
-nack() → status = "failed"      (retry_count < MAX_RETRY — 재처리 예약)
-nack() → status = "dlq"         (retry_count >= MAX_RETRY — DLQ 이동)
-```
-
----
-
-### 7.8 파일 위치
-
-```
-core/
-├── queue.py              ← QueueBackend / LocalQueue / SQSQueue / get_queue() / TASK_QUEUE_MAP
-├── queue_log.py          ← QueueLogger (queue_log 테이블 연동)
-└── ingest/
-    ├── task_worker.py    ← TaskWorker: Task Queue → agent 실행 → Ingest Queue push
-    ├── ingest_worker.py  ← IngestWorker: Ingest Queue → Medallion Raw 적재
-    └── store_raw.py      ← RawStore: brand_price_raw 등 Raw 레이어 저장 (SQLite → S3 교체 가능)
-scripts/
-└── replay_dlq.py         ← DLQ 메시지 수동 재처리 (DLQ → 원본 큐)
-```
-
----
-
-### 7.9 에이전트에서 큐 사용 패턴
-
-**Task Queue에 작업 적재 (스케줄러 / `run_site()` 진입 시)**
+**작업 적재 (스케줄러 / `run_site()` 진입 시)**
 
 ```python
 from uuid import uuid4
 from datetime import datetime, timezone
-from core.queue import get_queue
+from core.db import CrawlDB
 
-def enqueue_tasks(site_id: int, agent_type: str, items: list[dict]):
-    """items: [{"payload_type": "url", "payload": "https://...", "metadata": {...}}, ...]"""
-    q = get_queue(f"task_{agent_type}")
+def enqueue_tasks(run_id: str, site_id: int, agent_type: str, items: list[dict]):
+    db = CrawlDB()
     for item in items:
-        q.put({
-            "task_id":      str(uuid4()),
-            "agent_type":   agent_type,
-            "site_id":      site_id,
-            "payload_type": item["payload_type"],
-            "payload":      item["payload"],
-            "metadata":     item.get("metadata", {}),
-            "priority":     0,
-            "retry_count":  0,
-            "created_at":   datetime.now(timezone.utc).isoformat(),
-        })
+        db.execute("""
+            INSERT INTO crawl_tasks
+              (task_id, run_id, agent_type, site_id,
+               payload_type, payload, metadata, priority)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (str(uuid4()), run_id, agent_type, site_id,
+              item["payload_type"], item["payload"],
+              item.get("metadata", {}), item.get("priority", 0)))
+    db.close()
 ```
 
 **크롤링 결과 → Ingest Queue push (에이전트 내부)**
@@ -447,29 +294,43 @@ ingest_q = get_queue("ingest")
 ingest_q.put({
     "ingest_id":    str(uuid4()),
     "task_id":      task["task_id"],
+    "run_id":       task["run_id"],
     "agent_type":   task["agent_type"],
     "site_id":      task["site_id"],
+    "sequence_num": task["sequence_num"],
     "crawled_at":   datetime.now(timezone.utc).isoformat(),
     "payload_type": task["payload_type"],
     "source_url":   result.get("url", ""),
     "data":         result,
-    "status":       "success" if not result.get("error") else "failed",
-    "error_msg":    result.get("error", ""),
+    "status":       "success",  # 차단 시 "blocked"
+    "error_msg":    "",
 })
 ```
 
 ---
 
-### 7.10 Queue 절대 규칙
+### 7.5 파일 위치
+
+```
+core/queue/
+├── backend.py        ← QueueBackend / LocalQueue / SQSQueue (Ingest Queue 전용)
+├── log.py            ← QueueLogger (queue_log 테이블 연동)
+├── task_worker.py    ← TaskWorker: crawl_tasks DB 폴링 → 에이전트 실행
+├── ingest_worker.py  ← IngestWorker: Ingest Queue → RawStore 저장
+└── store_raw.py      ← RawStore (SQLite → S3 교체 가능)
+```
+
+---
+
+### 7.6 절대 규칙
 
 | 규칙 | 이유 |
 | ---- | ---- |
-| **`ack()`는 저장 완료 후에만 호출** | 저장 실패 시 메시지 유실 방지 |
-| **새 agent_type 추가 시 `TASK_QUEUE_MAP`에 등록** | 큐 누락 시 작업 적재 불가 |
-| **새 브랜드 추가 시 `task_brand_{brand}` 큐 등록** | 브랜드별 큐 분리 원칙 유지 |
-| **`LocalQueue`는 운영 환경 사용 금지** | 프로세스 재시작 시 메시지 초기화됨 |
-| **메시지 스키마 변경 시 `queue_log` 테이블도 동시 변경** | 이력 추적 필드 누락 방지 |
-| **SQS 전환 시 `QueueBackend` 서브클래스만 교체** | 에이전트 코드 무변경 원칙 |
+| `status='done'`은 저장 완료 후에만 업데이트 | 저장 실패 시 작업 유실 방지 |
+| 실패 처리는 retry_count 증가 + status 변경을 단일 UPDATE로 | 두 쿼리로 나누면 크래시 시 retry_count/status 불일치 발생 |
+| 타임아웃 복구 쿼리는 TaskWorker 폴링마다 실행 | processing 30분 경과 시 pending 복구 |
+| `LocalQueue`는 운영 환경 사용 금지 | 프로세스 재시작 시 메시지 초기화됨 |
+| IngestMessage에 `status='failed'` 사용 금지 | 실패는 crawl_tasks에서 관리, Ingest에는 success/blocked만 |
 
 ---
 

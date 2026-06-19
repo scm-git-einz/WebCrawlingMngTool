@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>크롤링 DB ERD (crawl_*)</title>
+<style>
+* { box-sizing: border-box; margin:0; padding:0; }
+body { font-family:'Segoe UI','Malgun Gothic',Arial,sans-serif; background:#ffffff; padding:16px; }
+h1 { font-size:16px; color:#1f2937; margin-bottom:4px; }
+.sub { font-size:11px; color:#6b7280; margin-bottom:14px; }
+.wrap { overflow:auto; width:100%; border:1px solid #e5e7eb; border-radius:8px; }
+.stage { position:relative; width:1520px; height:1180px; background:#fafafa; }
+svg.edges { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:visible; }
+.tbl {
+  position:absolute; background:#f9fafb; border:1.4px solid #9ca3af;
+  border-radius:7px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.08);
+}
+.tbl .hd {
+  background:#d1d5db; color:#1f2937; padding:4px 9px; border-bottom:1.4px solid #9ca3af;
+}
+.tbl .hd .pn { font-weight:700; font-size:12px; letter-spacing:.2px; }
+.tbl .hd .kn { font-size:10px; color:#4b5563; font-weight:600; }
+.tbl .row {
+  display:flex; align-items:center; gap:6px; font-size:10.5px; height:16px;
+  padding:0 8px; color:#374151; border-bottom:1px solid #f0f1f3;
+}
+.tbl .row:last-child { border-bottom:none; }
+.tbl .row.fk { background:#f3f4f6; }
+.badge { font-size:8px; font-weight:700; border-radius:3px; padding:0 3px;
+  border:1px solid #9ca3af; color:#4b5563; background:#e5e7eb; width:18px; text-align:center; }
+.badge.b { visibility:hidden; }
+.nm { font-weight:600; color:#1f2937; min-width:96px; }
+.ty { color:#6b7280; font-size:9px; min-width:74px; }
+.cm { color:#9ca3af; font-size:9px; font-style:italic; margin-left:auto; }
+.legend {
+  position:absolute; right:14px; top:10px; background:#fff; border:1.3px solid #9ca3af;
+  border-radius:7px; padding:9px 12px; font-size:10.5px; color:#374151; line-height:1.7; width:212px;
+}
+.legend b{ display:block; margin-bottom:4px; color:#1f2937; font-size:11px;}
+</style>
+</head>
+<body>
+<h1>크롤링 관리 플랫폼 — DB ERD</h1>
+<div class="sub">PostgreSQL (aops) · crawl_ 접두어 12개 테이블 · 논리/물리 구조 + 관계도</div>
+<div class="wrap"><div class="stage" id="stage">
+<svg class="edges" id="edges">
+  <defs>
+    <marker id="crow" markerWidth="14" markerHeight="14" refX="11" refY="6" orient="auto">
+      <path d="M11,6 L2,1 M11,6 L2,11 M11,6 L2,6" stroke="#4338ca" stroke-width="1.3" fill="none"/>
+      <line x1="13" y1="1" x2="13" y2="11" stroke="#4338ca" stroke-width="1.3"/>
+    </marker>
+    <marker id="one" markerWidth="10" markerHeight="14" refX="2" refY="6" orient="auto">
+      <line x1="4" y1="1" x2="4" y2="11" stroke="#4338ca" stroke-width="1.5"/>
+      <line x1="7" y1="1" x2="7" y2="11" stroke="#4338ca" stroke-width="1.5"/>
+    </marker>
+    <marker id="crowL" markerWidth="14" markerHeight="14" refX="11" refY="6" orient="auto">
+      <path d="M11,6 L2,1 M11,6 L2,11 M11,6 L2,6" stroke="#0891b2" stroke-width="1.2" fill="none"/>
+    </marker>
+  </defs>
+</svg>
+<div class="legend">
+  <b>범례</b>
+  <div><svg width="34" height="10"><line x1="0" y1="5" x2="34" y2="5" stroke="#4338ca" stroke-width="1.6" marker-start="url(#one)" marker-end="url(#crow)"/></svg> 물리 FK (1:N)</div>
+  <div><svg width="34" height="10"><line x1="0" y1="5" x2="34" y2="5" stroke="#0891b2" stroke-width="1.4" stroke-dasharray="5,3" marker-end="url(#crowL)"/></svg> 논리 참조 (코드값)</div>
+  <div style="margin-top:5px;border-top:1px solid #e5e7eb;padding-top:5px;">
+    <span class="badge" style="display:inline-block">PK</span> 기본키 &nbsp;
+    <span class="badge" style="display:inline-block">FK</span> 외래키
+  </div>
+  <div style="margin-top:4px;color:#6b7280;">헤더: <b>물리명</b> · 한글논리명<br>행: <b>물리명</b> · TYPE · <i>논리명</i></div>
+</div>
+</div></div>
+
+<script>
+const T = {
+  platforms:{x:30,y:30,w:300,t:'crawl_platforms',kn:'플랫폼 정의',c:[
+    ['PK','id','SERIAL','플랫폼 ID'],['','name','TEXT','플랫폼 코드'],['','display_name','TEXT','표시명'],
+    ['','detection','JSONB','감지규칙'],['','browser','JSONB','브라우저설정'],['','is_active','SMALLINT','활성여부'],['','created_at','TIMESTAMP','등록일시']]},
+  extraction_templates:{x:30,y:250,w:300,t:'crawl_extraction_templates',kn:'추출 템플릿',c:[
+    ['PK','id','SERIAL','템플릿 ID'],['FK','platform_id','INTEGER','플랫폼 FK'],['','target','TEXT','추출대상'],
+    ['','strategy','TEXT','추출전략'],['','config','JSONB','추출설정'],['','priority','INTEGER','우선순위']]},
+  system_codes:{x:30,y:470,w:300,t:'crawl_system_codes',kn:'시스템 공통코드',c:[
+    ['PK','id','SERIAL','코드 ID'],['','group_code','TEXT','코드그룹'],['','code','TEXT','코드값'],['','label','TEXT','라벨'],
+    ['','extra','JSONB','부가(icon/color/매핑)'],['','sort_order','INTEGER','정렬'],['','is_active','SMALLINT','활성'],['','created_at','TIMESTAMP','등록일']]},
+  agent_field_defs:{x:30,y:710,w:300,t:'crawl_agent_field_defs',kn:'수집필드 정의',c:[
+    ['PK','id','SERIAL','정의 ID'],['','agent_type','TEXT','에이전트유형'],['','field_key','TEXT','필드키'],['','label','TEXT','라벨'],
+    ['','config_key','TEXT','설정키'],['','sort_order','INTEGER','정렬'],['','is_active','SMALLINT','활성'],['','created_at','TIMESTAMP','등록일']]},
+
+  sites:{x:380,y:330,w:330,t:'crawl_sites',kn:'수집 대상 사이트',c:[
+    ['PK','id','SERIAL','사이트 ID'],['','site_name','TEXT','사이트명'],['','site_url','TEXT','수집 URL'],['','is_active','SMALLINT','활성'],
+    ['FK','platform_id','INTEGER','플랫폼 FK'],['','agent_type','TEXT','에이전트유형'],['','crawl_config','JSONB','수집설정'],
+    ['','category','TEXT','카테고리'],['','crawl_schedule','TEXT','수집주기'],['','created_at','TIMESTAMP','등록일'],['','updated_at','TIMESTAMP','수정일']]},
+
+  news_keywords:{x:780,y:30,w:300,t:'crawl_news_keywords',kn:'뉴스 검색 키워드',c:[
+    ['PK','id','SERIAL','키워드 ID'],['FK','site_id','INTEGER','사이트 FK'],['','keyword','TEXT','검색키워드'],['','is_active','SMALLINT','활성'],['','created_at','TIMESTAMP','등록일']]},
+  credentials:{x:780,y:200,w:300,t:'crawl_site_credentials',kn:'로그인 계정',c:[
+    ['PK','id','SERIAL','계정 ID'],['FK','site_id','INTEGER','사이트 FK'],['','login_id','TEXT','아이디'],['','login_pwd','TEXT','비밀번호'],
+    ['','label','TEXT','라벨'],['','is_active','SMALLINT','활성'],['','last_used_at','TIMESTAMP','최종사용'],['','created_at','TIMESTAMP','등록일']]},
+  results:{x:780,y:430,w:300,t:'crawl_results',kn:'수집 결과',c:[
+    ['PK','id','SERIAL','결과 ID'],['FK','site_id','INTEGER','사이트 FK'],['','crawl_date','TIMESTAMP','수집일시'],['','status','TEXT','수집상태'],
+    ['','product_count','INTEGER','수집건수'],['','error_msg','TEXT','오류'],['','elapsed_sec','DOUBLE','소요(초)']]},
+  ocr_usage_log:{x:780,y:640,w:300,t:'crawl_ocr_usage_log',kn:'OCR 사용이력',c:[
+    ['PK','id','SERIAL','로그 ID'],['FK','site_id','INTEGER','사이트 FK'],['','post_id','TEXT','게시글ID'],['','image_url','TEXT','이미지URL'],
+    ['','engine','TEXT','OCR엔진'],['','status','TEXT','상태'],['','text_length','INTEGER','텍스트길이'],['','price_count','INTEGER','가격수'],
+    ['','elapsed_ms','INTEGER','소요(ms)'],['','error_msg','TEXT','오류'],['','created_at','TIMESTAMP','처리일']]},
+  llm_usage:{x:780,y:910,w:300,t:'crawl_llm_usage',kn:'LLM 사용량',c:[
+    ['PK','id','SERIAL','로그 ID'],['FK','site_id','INTEGER','사이트 FK(NULL)'],['','agent_type','TEXT','에이전트'],['','task_type','TEXT','작업유형'],
+    ['','model','TEXT','모델'],['','prompt_tokens','INTEGER','입력토큰'],['','completion_tokens','INTEGER','출력토큰'],['','total_tokens','INTEGER','총토큰'],
+    ['','cost_usd','DOUBLE','비용USD'],['','input_preview','TEXT','입력미리'],['','output_preview','TEXT','출력미리'],['','elapsed_ms','INTEGER','소요(ms)'],['','created_at','TIMESTAMP','호출일']]},
+
+  data:{x:1160,y:430,w:300,t:'crawl_data',kn:'수집 원시데이터',c:[
+    ['PK','id','SERIAL','데이터 ID'],['FK','crawl_result_id','INTEGER','결과 FK'],['FK','site_id','INTEGER','사이트 FK'],['','agent_type','TEXT','에이전트'],
+    ['','items','JSONB','수집항목'],['','store_info','JSONB','매장정보'],['','item_count','INTEGER','건수'],['','created_at','TIMESTAMP','생성일']]},
+  failure_log:{x:1160,y:660,w:300,t:'crawl_failure_log',kn:'실패 이벤트 로그',c:[
+    ['PK','id','SERIAL','실패로그 ID'],['FK','site_id','INTEGER','사이트 FK'],['FK','crawl_result_id','INTEGER','결과 FK'],['','agent_type','TEXT','에이전트'],
+    ['','crawl_date','TIMESTAMP','실행일시'],['','failure_summary','JSONB','실패요약'],['','failure_events','JSONB','실패상세'],['','log_file','TEXT','로그파일'],['','created_at','TIMESTAMP','등록일']]},
+};
+
+const HD=42, RH=16;
+function height(k){ return HD + T[k].c.length*RH + 2; }
+
+const stage=document.getElementById('stage');
+for(const k in T){
+  const d=T[k]; const el=document.createElement('div');
+  el.className='tbl'; el.style.left=d.x+'px'; el.style.top=d.y+'px'; el.style.width=d.w+'px';
+  let rows='';
+  for(const [bk,nm,ty,cm] of d.c){
+    const b = bk? `<span class="badge">${bk}</span>` : `<span class="badge b">·</span>`;
+    rows += `<div class="row ${bk==='FK'?'fk':''}">${b}<span class="nm">${nm}</span><span class="ty">${ty}</span><span class="cm">${cm}</span></div>`;
+  }
+  el.innerHTML=`<div class="hd"><div class="pn">${d.t}</div><div class="kn">${d.kn}</div></div>${rows}`;
+  stage.appendChild(el);
+}
+
+function box(k){ const d=T[k]; return {l:d.x, r:d.x+d.w, t:d.y, b:d.y+height(k), w:d.w}; }
+function rowY(k, idx){ return T[k].y + HD + idx*RH + RH/2; }
+
+const svg=document.getElementById('edges');
+function path(pts, opt={}){
+  let dd='M'+pts[0][0]+' '+pts[0][1];
+  for(let i=1;i<pts.length;i++) dd+=' L'+pts[i][0]+' '+pts[i][1];
+  const p=document.createElementNS('http://www.w3.org/2000/svg','path');
+  p.setAttribute('d',dd); p.setAttribute('fill','none');
+  p.setAttribute('stroke',opt.color||'#4338ca');
+  p.setAttribute('stroke-width',opt.w||1.6);
+  if(opt.dash) p.setAttribute('stroke-dasharray',opt.dash);
+  if(opt.start) p.setAttribute('marker-start',opt.start);
+  if(opt.end) p.setAttribute('marker-end',opt.end);
+  svg.appendChild(p);
+}
+function label(x,y,txt,color){
+  const t=document.createElementNS('http://www.w3.org/2000/svg','text');
+  t.setAttribute('x',x); t.setAttribute('y',y); t.setAttribute('font-size','9.5');
+  t.setAttribute('fill',color||'#4338ca'); t.setAttribute('font-weight','600');
+  t.setAttribute('text-anchor','middle'); t.textContent=txt; svg.appendChild(t);
+}
+
+const P={start:'url(#one)', end:'url(#crow)', color:'#4338ca', w:1.6};
+
+(()=>{ const pb=box('platforms'), cb=box('extraction_templates');
+  const sy=rowY('platforms',0), dy=rowY('extraction_templates',1);
+  path([[pb.r,sy],[345,sy],[345,dy],[cb.l,dy]],P); label(346,(sy+dy)/2,'1:N'); })();
+(()=>{ const pb=box('platforms'), cb=box('sites');
+  const sy=rowY('platforms',0)+6, dy=rowY('sites',4);
+  path([[pb.r,sy],[357,sy],[357,dy],[cb.l,dy]],P); label(358,sy-6,'1:N'); })();
+
+const sb=box('sites');
+const Cedges=[
+  ['news_keywords',1, 340, 720],
+  ['credentials',1,   365, 732],
+  ['results',1,       405, 744],
+  ['ocr_usage_log',1, 445, 756],
+  ['llm_usage',1,     475, 768],
+];
+for(const [ck,ci,sy,ch] of Cedges){
+  const cb=box(ck); const dy=rowY(ck,ci);
+  path([[sb.r,sy],[ch,sy],[ch,dy],[cb.l,dy]],P);
+  label(ch+2, dy-5,'1:N');
+}
+
+const rb=box('results');
+(()=>{ const cb=box('data'); const sy=rowY('results',0); const dy=rowY('data',1);
+  path([[rb.r,sy],[1105,sy],[1105,dy],[cb.l,dy]],P); label(1106,dy-5,'1:N'); })();
+(()=>{ const cb=box('failure_log'); const sy=rowY('results',0)+7; const dy=rowY('failure_log',2);
+  path([[rb.r,sy],[1122,sy],[1122,dy],[cb.l,dy]],P); label(1123,dy-5,'1:N'); })();
+
+(()=>{ const cb=box('data'); const sy=rowY('sites',0); const dy=rowY('data',2);
+  path([[sb.r,sy],[695,sy],[695,16],[1135,16],[1135,dy],[cb.l,dy]],P); label(915,12,'1:N'); })();
+(()=>{ const cb=box('failure_log'); const sy=rowY('sites',0)+7; const dy=rowY('failure_log',1);
+  path([[sb.r,sy],[708,sy],[708,6],[1148,6],[1148,dy],[cb.l,dy]],P); })();
+
+const L={end:'url(#crowL)', color:'#0891b2', w:1.4, dash:'5,3'};
+(()=>{ const pb=box('system_codes'), cb=box('sites');
+  const sy=rowY('system_codes',1), dy=rowY('sites',5);
+  path([[pb.r,sy],[368,sy],[368,dy],[cb.l,dy]],L); label(368,sy-5,'코드','#0891b2'); })();
+(()=>{ const pb=box('system_codes'), cb=box('agent_field_defs');
+  const sx=T.system_codes.x+24, sy=pb.b, dy=cb.t;
+  path([[sx,sy],[sx,dy],[cb.l,dy]],L); })();
+(()=>{ const pb=box('system_codes'), cb=box('results');
+  const sy=rowY('system_codes',2), dy=rowY('results',3);
+  path([[pb.r,sy],[352,sy],[352,1135],[748,1135],[748,dy],[cb.l,dy]],L);
+  label(545,1131,'코드(status)','#0891b2'); })();
+</script>
+</body>
+</html>
